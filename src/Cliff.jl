@@ -8,8 +8,10 @@ struct Argument
     required::Bool
     flag::Bool
     has_default::Bool
-    default::String
+    default::Vector{String}
     positional::Bool
+    min_occurs::Int
+    max_occurs::Int
 end
 
 """Represents a command with its own arguments and sub-commands."""
@@ -38,8 +40,8 @@ mutable struct LevelResult
     arguments::Vector{Argument}
     argument_lookup::Dict{String, Int}
     positional_indices::Vector{Int}
-    values::Vector{String}
-    provided::BitVector
+    values::Vector{Vector{String}}
+    counts::Vector{Int}
 end
 
 """Parsed result returned by running a parser."""
@@ -115,7 +117,92 @@ function _build_command_lookup(commands::Vector{Command})
     return lookup
 end
 
-function Argument(names...; required::Bool = false, default = nothing, flag::Bool = false)
+const _UNBOUNDED = typemax(Int)
+
+function _normalize_repeat_value(value, name::String)
+    if !(value isa Integer) || value < 0
+        throw(ArgumentError("$(name) must be a non-negative integer"))
+    end
+    return Int(value)
+end
+
+function _normalize_max(value)
+    if value === :inf || value === :∞
+        return _UNBOUNDED
+    elseif value isa Integer
+        if value < 0
+            throw(ArgumentError("Maximum occurrences must be non-negative"))
+        end
+        return Int(value)
+    elseif value isa AbstractFloat && !isfinite(value)
+        return _UNBOUNDED
+    else
+        throw(ArgumentError("Unsupported maximum occurrences specification"))
+    end
+end
+
+function _normalize_repeat_spec(repeat)
+    if repeat isa Integer
+        if repeat < 0
+            throw(ArgumentError("Repeat count must be non-negative"))
+        end
+        val = Int(repeat)
+        return val, val
+    elseif repeat isa AbstractRange
+        first_val = first(repeat)
+        last_val = last(repeat)
+        if !(first_val isa Integer) || first_val < 0
+            throw(ArgumentError("Repeat range must start with a non-negative integer"))
+        end
+        if step(repeat) != 1
+            throw(ArgumentError("Repeat range must have a step size of 1"))
+        end
+        min_occurs = Int(first_val)
+        if last_val isa Integer
+            if last_val < min_occurs
+                throw(ArgumentError("Repeat range must have non-decreasing bounds"))
+            end
+            return min_occurs, Int(last_val)
+        elseif last_val isa AbstractFloat && !isfinite(last_val)
+            return min_occurs, _UNBOUNDED
+        else
+            throw(ArgumentError("Repeat range must end with an integer or Inf"))
+        end
+    elseif repeat isa Tuple && length(repeat) == 2
+        min_spec, max_spec = repeat
+        min_occurs = _normalize_repeat_value(min_spec, "Minimum occurrences")
+        max_occurs = max_spec === nothing ? _UNBOUNDED : _normalize_max(max_spec)
+        return min_occurs, max_occurs
+    else
+        throw(ArgumentError("Unsupported repeat specification"))
+    end
+end
+
+function _determine_occurrences(required::Bool, repeat, min_repeat, max_repeat)
+    min_occurs = required ? 1 : 0
+    max_occurs = 1
+    if repeat !== nothing && (min_repeat !== nothing || max_repeat !== nothing)
+        throw(ArgumentError("Cannot specify repeat together with min_repeat or max_repeat"))
+    end
+    if repeat !== nothing
+        min_occurs, max_occurs = _normalize_repeat_spec(repeat)
+    end
+    if min_repeat !== nothing
+        min_occurs = _normalize_repeat_value(min_repeat, "Minimum occurrences")
+    end
+    if max_repeat !== nothing
+        max_occurs = _normalize_max(max_repeat)
+    end
+    if required && min_occurs == 0
+        min_occurs = 1
+    end
+    if max_occurs != _UNBOUNDED && min_occurs > max_occurs
+        throw(ArgumentError("Minimum occurrences cannot exceed maximum occurrences"))
+    end
+    return min_occurs, max_occurs
+end
+
+function Argument(names...; required::Bool = false, default = nothing, flag::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing)
     collected = _collect_names(names...)
     positional = any(!startswith(name, "-") for name in collected)
     option = any(startswith(name, "-") for name in collected)
@@ -126,11 +213,19 @@ function Argument(names...; required::Bool = false, default = nothing, flag::Boo
         throw(ArgumentError("Flags must use option-style names"))
     end
     has_default = default !== nothing
-    default_value = has_default ? string(default) : ""
-    if flag
-        default_value = has_default ? string(default) : "false"
+    default_values = String[]
+    if has_default
+        if default isa AbstractVector
+            default_values = String.(default)
+        else
+            push!(default_values, string(default))
+        end
     end
-    return Argument(collected, required, flag, has_default, default_value, positional)
+    min_occurs, max_occurs = _determine_occurrences(required, repeat, min_repeat, max_repeat)
+    if has_default && max_occurs != _UNBOUNDED && length(default_values) > max_occurs
+        throw(ArgumentError("Default value count exceeds maximum occurrences"))
+    end
+    return Argument(collected, min_occurs > 0, flag, has_default, default_values, positional, min_occurs, max_occurs)
 end
 
 function Command(names...; arguments = Argument[], commands = Command[], usages = String[])
@@ -154,30 +249,18 @@ function Parser(; name::AbstractString = "", arguments = Argument[], commands = 
     return Parser(String(name), args_vec, cmds_vec, usages_vec, argument_lookup, positional_indices, command_lookup)
 end
 
-function _initial_values(arguments::Vector{Argument})
-    values = String[]
-    provided = BitVector(undef, length(arguments))
-    fill!(provided, false)
-    for argument in arguments
-        if argument.flag
-            push!(values, argument.has_default ? argument.default : "false")
-        elseif argument.has_default
-            push!(values, argument.default)
-        else
-            push!(values, "")
-        end
-    end
-    return values, provided
-end
-
 function _init_level(arguments::Vector{Argument}, lookup::Dict{String, Int}, positional_indices::Vector{Int})
-    values, provided = _initial_values(arguments)
-    return LevelResult(arguments, lookup, positional_indices, values, provided)
+    values = [String[] for _ in arguments]
+    counts = fill(0, length(arguments))
+    return LevelResult(arguments, lookup, positional_indices, values, counts)
 end
 
 function _ensure_required(level::LevelResult)
     for (idx, argument) in enumerate(level.arguments)
-        if argument.required && !level.provided[idx] && !argument.has_default
+        provided = level.counts[idx]
+        default_count = (argument.has_default && provided == 0) ? length(argument.default) : 0
+        total = provided + default_count
+        if total < argument.min_occurs
             throw(ArgumentError("Missing required argument: $(first(argument.names))"))
         end
     end
@@ -188,9 +271,59 @@ function _lookup_argument(level::LevelResult, name::String)
     return idx == 0 ? nothing : idx
 end
 
+function _find_level_index(parsed::Parsed, name::String)
+    for idx in Iterators.reverse(eachindex(parsed.levels))
+        level = parsed.levels[idx]
+        position = _lookup_argument(level, name)
+        if position !== nothing
+            return level, position
+        end
+    end
+    return nothing, 0
+end
+
+function _argument_values(level::LevelResult, idx::Int)
+    argument = level.arguments[idx]
+    stored = level.values[idx]
+    if !isempty(stored)
+        return copy(stored)
+    elseif argument.has_default
+        return copy(argument.default)
+    elseif argument.flag
+        return String["false"]
+    else
+        return String[]
+    end
+end
+
+function _single_value(level::LevelResult, idx::Int)
+    argument = level.arguments[idx]
+    if argument.max_occurs != 1
+        throw(ArgumentError("Argument $(first(argument.names)) accepts multiple values; use parsed[Vector, name] instead"))
+    end
+    stored = level.values[idx]
+    if !isempty(stored)
+        return stored[1]
+    elseif argument.has_default && !isempty(argument.default)
+        return argument.default[1]
+    elseif argument.flag
+        return "false"
+    else
+        return ""
+    end
+end
+
 function _set_value!(level::LevelResult, idx::Int, value::String)
-    level.values[idx] = value
-    level.provided[idx] = true
+    argument = level.arguments[idx]
+    count = level.counts[idx]
+    if argument.max_occurs == 1 && count == 1
+        level.values[idx][1] = value
+        return nothing
+    elseif argument.max_occurs != _UNBOUNDED && count >= argument.max_occurs
+        throw(ArgumentError("Argument $(first(argument.names)) cannot be provided more than $(argument.max_occurs) times"))
+    end
+    push!(level.values[idx], value)
+    level.counts[idx] = count + 1
     return nothing
 end
 
@@ -199,10 +332,16 @@ function _set_flag!(level::LevelResult, idx::Int)
 end
 
 function _next_positional_index(level::LevelResult, cursor::Int)
-    if cursor > length(level.positional_indices)
-        return nothing
+    current = cursor
+    while current <= length(level.positional_indices)
+        idx = level.positional_indices[current]
+        argument = level.arguments[idx]
+        if argument.max_occurs == _UNBOUNDED || level.counts[idx] < argument.max_occurs
+            return idx, current
+        end
+        current += 1
     end
-    return level.positional_indices[cursor]
+    return nothing, current
 end
 
 function _consume_option!(levels::Vector{LevelResult}, argv::Vector{String}, i::Int, token::String)
@@ -312,13 +451,17 @@ function parse(parser::Parser, argv::Vector{String})
             i = _consume_short_option!(levels, argv, i, token)
             continue
         end
-        positional_index = _next_positional_index(level, positional_cursors[end])
+        positional_index, cursor_position = _next_positional_index(level, positional_cursors[end])
         if positional_index === nothing
             throw(ArgumentError("Unexpected positional argument: $(token)"))
         end
         argument = level.arguments[positional_index]
         _set_value!(level, positional_index, token)
-        positional_cursors[end] += 1
+        if argument.max_occurs != _UNBOUNDED && level.counts[positional_index] >= argument.max_occurs
+            positional_cursors[end] = cursor_position + 1
+        else
+            positional_cursors[end] = cursor_position
+        end
         i += 1
     end
     for level in levels
@@ -340,7 +483,7 @@ function Base.getindex(parsed::Parsed, name::String)
         level = parsed.levels[idx]
         position = _lookup_argument(level, name)
         if position !== nothing
-            return level.values[position]
+            return _single_value(level, position)
         end
     end
     throw(KeyError(name))
@@ -355,7 +498,7 @@ function Base.getindex(parsed::Parsed, name::String, depth::Integer)
     if idx === nothing
         throw(KeyError(name))
     end
-    return level.values[idx]
+    return _single_value(level, idx)
 end
 
 _convert_value(::Type{String}, value::String) = value
@@ -390,6 +533,52 @@ end
 function Base.getindex(parsed::Parsed, ::Type{T}, name::String, depth::Integer) where {T}
     value = parsed[name, depth]
     return _convert_value(T, value)
+end
+
+function Base.getindex(parsed::Parsed, ::Type{Vector{T}}, name::String) where {T}
+    level, idx = _find_level_index(parsed, name)
+    if level === nothing
+        throw(KeyError(name))
+    end
+    values = _argument_values(level, idx)
+    converted = Vector{T}(undef, length(values))
+    for (i, value) in enumerate(values)
+        converted[i] = _convert_value(T, value)
+    end
+    return converted
+end
+
+function Base.getindex(parsed::Parsed, ::Type{Vector{T}}, name::String, depth::Integer) where {T}
+    if depth < 0 || depth + 1 > length(parsed.levels)
+        throw(ArgumentError("Invalid depth: $(depth)"))
+    end
+    level = parsed.levels[depth + 1]
+    idx = _lookup_argument(level, name)
+    if idx === nothing
+        throw(KeyError(name))
+    end
+    values = _argument_values(level, idx)
+    converted = Vector{T}(undef, length(values))
+    for (i, value) in enumerate(values)
+        converted[i] = _convert_value(T, value)
+    end
+    return converted
+end
+
+function Base.getindex(parsed::Parsed, ::typeof(+), name::String)
+    return parsed[Vector{String}, name]
+end
+
+function Base.getindex(parsed::Parsed, ::typeof(+), name::String, depth::Integer)
+    return parsed[Vector{String}, name, depth]
+end
+
+function Base.getindex(parsed::Parsed, ::Type{T}, ::typeof(+), name::String) where {T}
+    return parsed[Vector{T}, name]
+end
+
+function Base.getindex(parsed::Parsed, ::Type{T}, ::typeof(+), name::String, depth::Integer) where {T}
+    return parsed[Vector{T}, name, depth]
 end
 
 end # module

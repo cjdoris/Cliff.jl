@@ -5,13 +5,13 @@ using Cliff
     arg = Argument(["--name", "-n"]; default = "guest")
     @test arg.flag == false
     @test arg.names == ["--name", "-n"]
-    @test arg.default == "guest"
+    @test arg.default == ["guest"]
     @test arg.has_default
     @test !arg.positional
 
     flag = Argument("--verbose"; flag = true)
     @test flag.flag
-    @test flag.default == "false"
+    @test isempty(flag.default)
 end
 
 @testset "Basic parsing" begin
@@ -48,6 +48,9 @@ end
     @test parsed["--limit"] == "20"
     @test parsed[String, "--limit", 2] == "20"
     @test parsed[String, "input", 0] == "input.txt"
+    @test parsed[Vector{String}, "input"] == ["input.txt"]
+    @test parsed[Vector{String}, "--threads"] == ["4"]
+    @test parsed[Vector{String}, "output"] == ["out.txt"]
 end
 
 @testset "Command disambiguation" begin
@@ -81,13 +84,51 @@ end
     parsed = parser(["--count", "5", "--dry-run"])
     @test parsed[Int, "--count"] == 5
     @test parsed[Bool, "--dry-run"]
+    @test parsed[Vector{String}, "--dry-run"] == ["true"]
 
     parsed2 = parser(["-c", "7"])
     @test parsed2[String, "-c"] == "7"
     @test !parsed2[Bool, "--dry-run"]
+    @test parsed2[Vector{String}, "--dry-run"] == ["false"]
 
     @test_throws ArgumentError parser(["--count"])
     @test_throws ArgumentError parser(["--unknown", "value"])
+end
+
+@testset "Repeatable arguments" begin
+    parser = Parser(
+        arguments = [
+            Argument("--multi"; repeat = 2:4),
+            Argument("--numbers"; min_repeat = 1, max_repeat = :inf),
+            Argument("pos"; repeat = 1:3),
+            Argument("--flag"; flag = true, max_repeat = :inf)
+        ]
+    )
+
+    parsed = parser([
+        "--multi", "one",
+        "--multi", "two",
+        "--numbers", "10",
+        "--numbers", "20",
+        "--numbers", "30",
+        "posA", "posB",
+        "--flag", "--flag"
+    ])
+
+    @test parsed[Vector{String}, "--multi"] == ["one", "two"]
+    @test parsed[Vector{Int}, "--numbers"] == [10, 20, 30]
+    @test parsed[+, "--numbers"] == ["10", "20", "30"]
+    @test parsed[Int, +, "--numbers"] == [10, 20, 30]
+    @test parsed[Vector{String}, "pos"] == ["posA", "posB"]
+    @test parsed[Vector{Bool}, "--flag"] == [true, true]
+    @test_throws ArgumentError parsed["--multi"]
+    @test_throws ArgumentError parsed[Bool, "--flag"]
+
+    @test_throws ArgumentError parser([
+        "--multi", "only",
+        "--numbers", "1",
+        "posA"
+    ])
 end
 
 @testset "Double dash behaviour" begin
