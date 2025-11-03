@@ -10,12 +10,21 @@ Parsing command line arguments returns a `Parsed` object—typically stored in a
 
 ## Features
 
-- Positional and option arguments are required by default unless you provide a default or explicitly mark them optional, while flags remain optional with an implicit default of `"false"`.
+### Argument definition
+
+- Cliff automatically marks arguments optional whenever a sensible default exists: providing `default`, using `flag = true`, marking `stop = true`, or specifying `repeat = true` all drop the minimum occurrence to zero.
+- Apply `choices` to constrain input to an explicit allowlist and `regex` to enforce pattern matching.
+- Repeatable positional arguments, options, and flags with configurable occurrence ranges.
+- Arguments that can terminate parsing early via `stop = true` (ideal for `--help`).
+
+### Command orchestration
+
 - Nested sub-commands with disambiguation of arguments by command depth.
 - Reusable command definitions via `Command("name", parser)`.
 - Explicit handling of `--` to stop option parsing while still allowing sub-command detection.
-- Arguments that can terminate parsing early via `stop = true` (ideal for `--help`).
-- Repeatable positional arguments, options, and flags with configurable occurrence ranges.
+
+### Retrieval & diagnostics
+
 - Retrieval helpers such as `args["name"]`, `args["name", depth]`, `args["name", Type]`, and `args["name", Vector{T}]` (or the shorthand `args["name", Type, +]`).
 - Configurable error handling that can exit, throw a `ParseError`, or return a partial `Parsed` result.
 - No implicit `--help` handling and no automatic usage string generation.
@@ -31,6 +40,22 @@ Values are stored as strings but can be converted when accessed from a `Parsed` 
 
 This allows you to keep your parser definitions declarative while still retrieving strongly typed values at the call site.
 
+## Argument Validation
+
+Cliff can validate incoming values without custom code:
+
+- `choices = [...]` forces inputs to match a curated allowlist. Defaults and explicit `flag_value`s must appear in the same list.
+- `regex = r"..."` requires each value to match the supplied pattern.
+- Use `required = false` to assert that an argument stays optional; Cliff raises an error if no sensible default exists.
+
+Both options apply to positional arguments, options, and flags, and they work alongside repetition controls. When validation fails Cliff raises a `ParseError` with kind `:invalid_value` so you can render a friendly message or surface it to the user as-is.
+
+```julia
+Argument("mode"; choices = ["fast", "slow"], default = "fast")
+Argument("--name"; regex = r"^[a-z]+$", default = "guest")
+Argument("--tag"; choices = ["red", "blue"], repeat = true)
+```
+
 ## Quick Start
 
 In code, bring 🏔️ Cliff into scope with `using Cliff`:
@@ -42,6 +67,8 @@ parser = Parser(
     arguments = [
         Argument("input"),
         Argument(["--count", "-c"]; default = "1"),
+        Argument("--tag"; repeat = true),
+        Argument("--mode"; choices = ["fast", "slow"], default = "fast"),
         Argument("--verbose"; flag = true)
     ],
     commands = [
@@ -56,16 +83,17 @@ parser = Parser(
     ]
 )
 
-args = parser(["input.txt", "run", "task-name", "fast", "--threads", "8"])
+args = parser(["input.txt", "--tag", "demo", "--tag", "release", "run", "task-name", "fast", "--threads", "8"])
 
 println(args.command)             # ["run", "fast"]
 println(args["input"])           # "input.txt"
 println(args["task"])            # "task-name"
+println(args["--mode"])          # "fast"
 println(args["--threads", Int])  # 8
 println(args["--verbose", Bool]) # false
 
 # Collect repeated values
-println(args["--threads", Vector{String}])  # ["8"]
+println(args["--tag", Vector{String}])      # ["demo", "release"]
 ```
 
 ### Flags and `flag_value`
@@ -80,7 +108,7 @@ Argument("--mode"; flag = true, default = "disabled", flag_value = "enabled")
 
 ## Early stopping and error handling
 
-Mark any argument with `stop = true` to halt parsing once that argument (and any associated value) has been consumed. This is particularly handy for implementing manual `--help` handling:
+Mark any argument with `stop = true` to halt parsing once that argument (and any associated value) has been consumed. Cliff treats these arguments as optional so they never block required-argument checks. This is particularly handy for implementing manual `--help` handling:
 
 ```julia
 help_parser = Parser(
@@ -109,11 +137,11 @@ The returned `Parsed` object exposes `success`, `complete`, `stopped`, `stop_arg
 
 ## Examples
 
-`examples/example.jl` demonstrates all core features—including nested commands, positional and option defaults, repeating arguments, early stopping, and error handling. Run it with different argument lists to see how `Parsed` changes:
+`examples/example.jl` demonstrates all core features—including nested commands, positional and option defaults, value validation, repeating arguments, early stopping, and error handling. Run it with different argument lists to see how `Parsed` changes:
 
 ```bash
 julia --project examples/example.jl --help
-julia --project examples/example.jl target --tag demo --tag test --verbose run quick --repeat once --repeat twice --threads 6 fast --limit 5 --extra a --extra b
+julia --project examples/example.jl target --tag demo --tag test --verbose --profile release --label nightly-build run quick --repeat once --repeat twice --threads 6 fast --limit 5 --extra a --extra b
 ```
 
 ## Development

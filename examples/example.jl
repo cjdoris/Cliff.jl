@@ -3,7 +3,7 @@ using Cliff
 
 subtools = Parser(
     arguments = [
-        Argument("--tool"; default = "hammer"),
+        Argument("--tool"; choices = ["hammer", "saw", "wrench"], default = "hammer"),
         Argument("--list"; flag = true, default = "no", flag_value = "yes")
     ],
     commands = [
@@ -21,16 +21,18 @@ parser = Parser(
     arguments = [
         Argument("target"),
         Argument(["--count", "-c"]; default = "1"),
-        Argument("--tag"; max_repeat = :inf, required = false),
+        Argument("--tag"; repeat = true),
         Argument("--help"; flag = true, stop = true),
-        Argument("--verbose"; flag = true)
+        Argument("--verbose"; flag = true),
+        Argument("--profile"; choices = ["debug", "release"], default = "debug"),
+        Argument("--label"; regex = r"^[a-z0-9_-]+$", default = String[])
     ],
     commands = [
         Command("run";
             arguments = [
                 Argument("mode"),
                 Argument(["--threads", "-t"]; default = "4"),
-                Argument("--repeat"; repeat = 1:3),
+                Argument("--repeat"; repeat = 1:3, choices = ["once", "twice", "thrice"]),
                 Argument("--dry-run"; flag = true),
                 Argument("--help"; flag = true, stop = true)
             ],
@@ -38,7 +40,7 @@ parser = Parser(
                 Command("fast";
                     arguments = [
                         Argument("--limit"; default = "10"),
-                        Argument("--extra"; max_repeat = :inf, required = false)
+                        Argument("--extra"; repeat = true)
                     ]
                 ),
                 Command("slow";
@@ -85,6 +87,10 @@ end
 
 println("count as Int: ", args["--count", Int])
 println("tags: ", repr(args["--tag", Vector{String}]))
+println("profile: ", args["--profile"])
+
+label_values = args["--label", Vector{String}]
+println("label: ", isempty(label_values) ? "(none)" : label_values[1])
 
 if args.success && !isempty(args.command)
     if args.command[1] == "run"
