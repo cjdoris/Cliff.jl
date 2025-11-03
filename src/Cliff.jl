@@ -271,9 +271,9 @@ function _lookup_argument(level::LevelResult, name::String)
     return idx == 0 ? nothing : idx
 end
 
-function _find_level_index(parsed::Parsed, name::String)
-    for idx in Iterators.reverse(eachindex(parsed.levels))
-        level = parsed.levels[idx]
+function _find_level_index(args::Parsed, name::String)
+    for idx in Iterators.reverse(eachindex(args.levels))
+        level = args.levels[idx]
         position = _lookup_argument(level, name)
         if position !== nothing
             return level, position
@@ -299,7 +299,7 @@ end
 function _single_value(level::LevelResult, idx::Int)
     argument = level.arguments[idx]
     if argument.max_occurs != 1
-        throw(ArgumentError("Argument $(first(argument.names)) accepts multiple values; use parsed[Vector, name] instead"))
+        throw(ArgumentError("Argument $(first(argument.names)) accepts multiple values; use args[Vector, name] instead"))
     end
     stored = level.values[idx]
     if !isempty(stored)
@@ -478,9 +478,9 @@ function (parser::Parser)()
     return parse(parser, copy(ARGS))
 end
 
-function Base.getindex(parsed::Parsed, name::String)
-    for idx in Iterators.reverse(eachindex(parsed.levels))
-        level = parsed.levels[idx]
+function Base.getindex(args::Parsed, name::String)
+    for idx in Iterators.reverse(eachindex(args.levels))
+        level = args.levels[idx]
         position = _lookup_argument(level, name)
         if position !== nothing
             return _single_value(level, position)
@@ -489,11 +489,11 @@ function Base.getindex(parsed::Parsed, name::String)
     throw(KeyError(name))
 end
 
-function Base.getindex(parsed::Parsed, name::String, depth::Integer)
-    if depth < 0 || depth + 1 > length(parsed.levels)
+function Base.getindex(args::Parsed, name::String, depth::Integer)
+    if depth < 0 || depth + 1 > length(args.levels)
         throw(ArgumentError("Invalid depth: $(depth)"))
     end
-    level = parsed.levels[depth + 1]
+    level = args.levels[depth + 1]
     idx = _lookup_argument(level, name)
     if idx === nothing
         throw(KeyError(name))
@@ -525,18 +525,18 @@ function _convert_value(T::Type, value::String)
     end
 end
 
-function Base.getindex(parsed::Parsed, ::Type{T}, name::String) where {T}
-    value = parsed[name]
+function Base.getindex(args::Parsed, ::Type{T}, name::String) where {T}
+    value = args[name]
     return _convert_value(T, value)
 end
 
-function Base.getindex(parsed::Parsed, ::Type{T}, name::String, depth::Integer) where {T}
-    value = parsed[name, depth]
+function Base.getindex(args::Parsed, ::Type{T}, name::String, depth::Integer) where {T}
+    value = args[name, depth]
     return _convert_value(T, value)
 end
 
-function Base.getindex(parsed::Parsed, ::Type{Vector{T}}, name::String) where {T}
-    level, idx = _find_level_index(parsed, name)
+function Base.getindex(args::Parsed, ::Type{Vector{T}}, name::String) where {T}
+    level, idx = _find_level_index(args, name)
     if level === nothing
         throw(KeyError(name))
     end
@@ -548,11 +548,11 @@ function Base.getindex(parsed::Parsed, ::Type{Vector{T}}, name::String) where {T
     return converted
 end
 
-function Base.getindex(parsed::Parsed, ::Type{Vector{T}}, name::String, depth::Integer) where {T}
-    if depth < 0 || depth + 1 > length(parsed.levels)
+function Base.getindex(args::Parsed, ::Type{Vector{T}}, name::String, depth::Integer) where {T}
+    if depth < 0 || depth + 1 > length(args.levels)
         throw(ArgumentError("Invalid depth: $(depth)"))
     end
-    level = parsed.levels[depth + 1]
+    level = args.levels[depth + 1]
     idx = _lookup_argument(level, name)
     if idx === nothing
         throw(KeyError(name))
@@ -565,20 +565,20 @@ function Base.getindex(parsed::Parsed, ::Type{Vector{T}}, name::String, depth::I
     return converted
 end
 
-function Base.getindex(parsed::Parsed, ::typeof(+), name::String)
-    return parsed[Vector{String}, name]
+function Base.getindex(args::Parsed, ::typeof(+), name::String)
+    return args[Vector{String}, name]
 end
 
-function Base.getindex(parsed::Parsed, ::typeof(+), name::String, depth::Integer)
-    return parsed[Vector{String}, name, depth]
+function Base.getindex(args::Parsed, ::typeof(+), name::String, depth::Integer)
+    return args[Vector{String}, name, depth]
 end
 
-function Base.getindex(parsed::Parsed, ::Type{T}, ::typeof(+), name::String) where {T}
-    return parsed[Vector{T}, name]
+function Base.getindex(args::Parsed, ::Type{T}, ::typeof(+), name::String) where {T}
+    return args[Vector{T}, name]
 end
 
-function Base.getindex(parsed::Parsed, ::Type{T}, ::typeof(+), name::String, depth::Integer) where {T}
-    return parsed[Vector{T}, name, depth]
+function Base.getindex(args::Parsed, ::Type{T}, ::typeof(+), name::String, depth::Integer) where {T}
+    return args[Vector{T}, name, depth]
 end
 
 end # module
