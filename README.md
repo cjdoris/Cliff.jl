@@ -13,7 +13,8 @@ Parsing command line arguments returns a `Parsed` object that exposes convenient
 - Positional arguments, options, and boolean flags.
 - Nested sub-commands with disambiguation of arguments by command depth.
 - Explicit handling of `--` to stop option parsing while still allowing sub-command detection.
-- Retrieval helpers such as `parsed["name"]`, `parsed["name", depth]`, and `parsed[Type, "name"]`.
+- Repeatable positional arguments, options, and flags with configurable occurrence ranges.
+- Retrieval helpers such as `parsed["name"]`, `parsed["name", depth]`, `parsed[Type, "name"]`, and `parsed[Vector{T}, "name"]` (or the shorthand `parsed[T, +, "name"]`).
 - No implicit `--help` handling and no automatic usage string generation.
 
 ## Quick Start
@@ -45,6 +46,9 @@ println(parsed.command)             # ["run", "fast"]
 println(parsed["task"])            # "task-name"
 println(parsed[Int, "--threads"])  # 8
 println(parsed[Bool, "--verbose"]) # false
+
+# Collect repeated values
+println(parsed[Vector{String}, "--threads"])  # ["8"]
 ```
 
 ## Development
