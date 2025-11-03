@@ -10,11 +10,14 @@ Parsing command line arguments returns a `Parsed` object—typically stored in a
 
 ## Features
 
-- Positional arguments, options, and boolean flags.
+- Positional and option arguments are required by default unless you provide a default or explicitly mark them optional, while flags remain optional with an implicit default of `"false"`.
 - Nested sub-commands with disambiguation of arguments by command depth.
+- Reusable command definitions via `Command("name", parser)`.
 - Explicit handling of `--` to stop option parsing while still allowing sub-command detection.
+- Arguments that can terminate parsing early via `stop = true` (ideal for `--help`).
 - Repeatable positional arguments, options, and flags with configurable occurrence ranges.
 - Retrieval helpers such as `args["name"]`, `args["name", depth]`, `args["name", Type]`, and `args["name", Vector{T}]` (or the shorthand `args["name", Type, +]`).
+- Configurable error handling that can exit, throw a `ParseError`, or return a partial `Parsed` result.
 - No implicit `--help` handling and no automatic usage string generation.
 
 ## Typed Retrieval
@@ -37,13 +40,13 @@ using Cliff
 
 parser = Parser(
     arguments = [
-        Argument("input"; required = true),
+        Argument("input"),
         Argument(["--count", "-c"]; default = "1"),
         Argument("--verbose"; flag = true)
     ],
     commands = [
         Command("run";
-            arguments = [Argument("task"; required = true)],
+            arguments = [Argument("task")],
             commands = [
                 Command("fast";
                     arguments = [Argument("--threads"; default = "4")]
@@ -63,6 +66,54 @@ println(args["--verbose", Bool]) # false
 
 # Collect repeated values
 println(args["--threads", Vector{String}])  # ["8"]
+```
+
+### Flags and `flag_value`
+
+Flags default to the string `"false"` when omitted, so `args["--verbose", Bool]` returns `false` unless the flag appears on the command line. When a flag is present it adopts a value that can be customised via the `flag_value` keyword. If you omit `flag_value` Cliff picks a sensible opposite of the default (`"true"` ↔ `"false"`, `"yes"` ↔ `"no"`, `"on"` ↔ `"off"`, etc.) and falls back to `"true"` for anything else:
+
+```julia
+Argument("--confirm"; flag = true, default = "no")        # -> "no" / "yes"
+Argument("--enable"; flag = true)                          # -> "false" / "true"
+Argument("--mode"; flag = true, default = "disabled", flag_value = "enabled")
+```
+
+## Early stopping and error handling
+
+Mark any argument with `stop = true` to halt parsing once that argument (and any associated value) has been consumed. This is particularly handy for implementing manual `--help` handling:
+
+```julia
+help_parser = Parser(
+    arguments = [
+        Argument("input"),
+        Argument("--help"; flag = true, stop = true)
+    ],
+    commands = [Command("run"; arguments = [Argument("task")])]
+)
+
+help_args = help_parser(["--help"])
+help_args.stopped        # true
+help_args.complete       # false – required arguments are unchecked
+help_args.stop_argument  # "--help"
+```
+
+When validation fails you can control how Cliff responds using the `error_mode` keyword:
+
+```julia
+parse(help_parser, String[]; error_mode = :return)  # -> Parsed with success = false
+parse(help_parser, String[]; error_mode = :throw)   # -> throws ParseError
+parse(help_parser, String[]; error_mode = :exit)    # -> prints message and exits (default)
+```
+
+The returned `Parsed` object exposes `success`, `complete`, `stopped`, `stop_argument`, and an optional `error::ParseError` for full diagnostics.
+
+## Examples
+
+`examples/example.jl` demonstrates all core features—including nested commands, positional and option defaults, repeating arguments, early stopping, and error handling. Run it with different argument lists to see how `Parsed` changes:
+
+```bash
+julia --project examples/example.jl --help
+julia --project examples/example.jl target --tag demo --tag test --verbose run quick --repeat once --repeat twice --threads 6 fast --limit 5 --extra a --extra b
 ```
 
 ## Development
