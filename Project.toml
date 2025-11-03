@@ -1,0 +1,15 @@
+name = "Cliff"
+uuid = "5e6218ff-0000-0000-0000-000000000000"
+authors = ["Cliff.jl Contributors"]
+version = "0.1.0"
+
+[deps]
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
+
+[compat]
+julia = "1.9"

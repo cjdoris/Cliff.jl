@@ -1,0 +1,11 @@
+# Julia artifacts
+Manifest.toml
+
+# Build artifacts
+*.jl.cov
+*.jl.mem
+*.ji
+
+# Generated docs or coverage
+coverage/
+docs/build/
