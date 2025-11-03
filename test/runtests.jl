@@ -73,6 +73,36 @@ end
     @test args["item", 2] == "leaf"
 end
 
+@testset "Command ordering" begin
+    parser = Parser(
+        arguments = [Argument("input"; required = true)],
+        commands = [
+            Command("run";
+                arguments = [Argument("task"; required = true)],
+                commands = [Command("fast")]
+            )
+        ]
+    )
+
+    @test_throws ArgumentError parser(["run"])
+    @test_throws ArgumentError parser(["input.txt"])
+    @test_throws ArgumentError parser(["input.txt", "run", "fast"])
+
+    args = parser(["input.txt", "run", "build", "fast"])
+    @test args.command == ["run", "fast"]
+    @test args["input"] == "input.txt"
+    @test args["task"] == "build"
+
+    optional = Parser(
+        arguments = [Argument("maybe")],
+        commands = [Command("go")]
+    )
+
+    parsed_optional = optional(["go"])
+    @test parsed_optional.command == ["go"]
+    @test parsed_optional["maybe", Vector{String}] == String[]
+end
+
 @testset "Option handling" begin
     parser = Parser(
         arguments = [
@@ -195,8 +225,7 @@ end
     @test args["value"] == "beta"
     @test args["name", 0] == "alpha"
 
-    positional_args = parser(["alpha", "--", "--not-a-command"])
-    @test positional_args["rest"] == "--not-a-command"
+    @test_throws ArgumentError parser(["alpha", "--", "--not-a-command"])
 end
 
 @testset "Type conversion errors" begin

@@ -331,6 +331,20 @@ function _set_flag!(level::LevelResult, idx::Int)
     _set_value!(level, idx, "true")
 end
 
+function _has_outstanding_required(level::LevelResult)
+    for idx in level.positional_indices
+        argument = level.arguments[idx]
+        provided = level.counts[idx]
+        if provided < argument.min_occurs
+            default_count = (argument.has_default && provided == 0) ? length(argument.default) : 0
+            if provided + default_count < argument.min_occurs
+                return true
+            end
+        end
+    end
+    return false
+end
+
 function _next_positional_index(level::LevelResult, cursor::Int)
     current = cursor
     while current <= length(level.positional_indices)
@@ -426,6 +440,10 @@ function parse(parser::Parser, argv::Vector{String})
     current = parser
     i = 1
     allow_options = true
+    command_requirements = Bool[!isempty(parser.commands)]
+    command_satisfied = Bool[false]
+    level_labels = String[parser.name == "" ? "parser" : parser.name]
+    level_is_root = Bool[true]
     while i <= length(argv)
         token = argv[i]
         if allow_options && token == "--"
@@ -435,12 +453,18 @@ function parse(parser::Parser, argv::Vector{String})
         end
         level = levels[end]
         cmd_idx = get(current.command_lookup, token, 0)
-        if cmd_idx != 0
-            current = current.commands[cmd_idx]
+        if cmd_idx != 0 && !_has_outstanding_required(level)
+            command_satisfied[end] = true
+            next_command = current.commands[cmd_idx]
+            current = next_command
             push!(command_path, token)
-            push!(levels, _init_level(current.arguments, current.argument_lookup, current.positional_indices))
+            push!(levels, _init_level(next_command.arguments, next_command.argument_lookup, next_command.positional_indices))
             push!(positional_cursors, 1)
             allow_options = true
+            push!(command_requirements, !isempty(next_command.commands))
+            push!(command_satisfied, false)
+            push!(level_labels, token)
+            push!(level_is_root, false)
             i += 1
             continue
         end
@@ -466,6 +490,14 @@ function parse(parser::Parser, argv::Vector{String})
     end
     for level in levels
         _ensure_required(level)
+    end
+    for idx in eachindex(command_requirements)
+        if command_requirements[idx] && !command_satisfied[idx]
+            label = level_labels[idx]
+            is_root = level_is_root[idx]
+            message = is_root ? "Expected a command" : "Expected a sub-command for $(label)"
+            throw(ArgumentError(message))
+        end
     end
     return Parsed(command_path, levels)
 end
