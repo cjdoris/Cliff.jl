@@ -14,6 +14,9 @@ struct Argument
     min_occurs::Int
     max_occurs::Int
     flag_value::String
+    choices::Vector{String}
+    has_regex::Bool
+    regex::Regex
 end
 
 """Represents a command with its own arguments and sub-commands."""
@@ -275,7 +278,40 @@ function _derive_flag_value(default_value::String)
     return _match_flag_case(default_value, opposite)
 end
 
-function Argument(names...; required::Union{Bool, Nothing} = nothing, default = nothing, flag::Bool = false, flag_value = nothing, stop::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing)
+function _normalize_choices(values)
+    if !(values isa AbstractVector)
+        throw(ArgumentError("choices must be provided as a vector of strings"))
+    end
+    seen = Dict{String, Bool}()
+    normalised = String[]
+    for value in values
+        if !(value isa AbstractString)
+            throw(ArgumentError("choices must contain only strings"))
+        end
+        str = String(value)
+        if haskey(seen, str)
+            throw(ArgumentError("Duplicate choice: $(str)"))
+        end
+        push!(normalised, str)
+        seen[str] = true
+    end
+    if isempty(normalised)
+        throw(ArgumentError("choices must contain at least one value"))
+    end
+    return normalised
+end
+
+function _normalize_regex(regex)
+    if regex isa Regex
+        return regex
+    elseif regex isa AbstractString
+        return Regex(String(regex))
+    else
+        throw(ArgumentError("regex must be a Regex or a string pattern"))
+    end
+end
+
+function Argument(names...; required::Union{Bool, Nothing} = nothing, default = nothing, flag::Bool = false, flag_value = nothing, stop::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing, choices = nothing, regex = nothing)
     collected = _collect_names(names...)
     positional = any(!startswith(name, "-") for name in collected)
     option = any(startswith(name, "-") for name in collected)
@@ -305,12 +341,40 @@ function Argument(names...; required::Union{Bool, Nothing} = nothing, default = 
         default_values = String["false"]
     end
     computed_flag_value = flag ? (flag_value === nothing ? _derive_flag_value(isempty(default_values) ? "" : default_values[1]) : string(flag_value)) : ""
-    required_flag = required === nothing ? (!flag && !has_default) : required
+    repeat_implies_optional = repeat === true
+    has_sensible_default = has_default || flag || repeat_implies_optional || stop
+    if required === false && !has_sensible_default
+        throw(ArgumentError("required=false is only supported when the argument is optional by default"))
+    end
+    required_flag = required === nothing ? !has_sensible_default : required
     min_occurs, max_occurs = _determine_occurrences(required_flag, repeat, min_repeat, max_repeat)
     if has_default && max_occurs != _UNBOUNDED && length(default_values) > max_occurs
         throw(ArgumentError("Default value count exceeds maximum occurrences"))
     end
-    return Argument(collected, min_occurs > 0, flag, stop, has_default, default_values, positional, min_occurs, max_occurs, computed_flag_value)
+    choice_values = choices === nothing ? String[] : _normalize_choices(choices)
+    regex_obj = regex === nothing ? r"" : _normalize_regex(regex)
+    has_regex = regex !== nothing
+    if !isempty(choice_values)
+        for value in default_values
+            if value ∉ choice_values
+                throw(ArgumentError("Default value $(repr(value)) is not permitted by choices"))
+            end
+        end
+        if flag && !(computed_flag_value in choice_values)
+            throw(ArgumentError("flag_value $(repr(computed_flag_value)) is not permitted by choices"))
+        end
+    end
+    if has_regex
+        for value in default_values
+            if match(regex_obj, value) === nothing
+                throw(ArgumentError("Default value $(repr(value)) does not match regex"))
+            end
+        end
+        if flag && match(regex_obj, computed_flag_value) === nothing
+            throw(ArgumentError("flag_value $(repr(computed_flag_value)) does not match regex"))
+        end
+    end
+    return Argument(collected, min_occurs > 0, flag, stop, has_default, default_values, positional, min_occurs, max_occurs, computed_flag_value, choice_values, has_regex, regex_obj)
 end
 
 function Command(names...; arguments = Argument[], commands = Command[], usages = String[])
@@ -408,9 +472,35 @@ function _single_value(level::LevelResult, idx::Int)
     end
 end
 
+function _validate_argument_value(argument::Argument, value::String, command_path::Vector{String}, levels::Vector{LevelResult})
+    if !isempty(argument.choices) && !(value in argument.choices)
+        valid = join(argument.choices, ", ")
+        _throw_parse_error(
+            :invalid_value,
+            "Argument $(first(argument.names)) must be one of: $(valid)",
+            command_path,
+            levels;
+            argument = first(argument.names),
+            token = value,
+        )
+    end
+    if argument.has_regex && match(argument.regex, value) === nothing
+        _throw_parse_error(
+            :invalid_value,
+            "Argument $(first(argument.names)) must match pattern $(argument.regex)",
+            command_path,
+            levels;
+            argument = first(argument.names),
+            token = value,
+        )
+    end
+    return nothing
+end
+
 function _set_value!(level::LevelResult, idx::Int, value::String, command_path::Vector{String}, levels::Vector{LevelResult})
     argument = level.arguments[idx]
     count = level.counts[idx]
+    _validate_argument_value(argument, value, command_path, levels)
     if argument.max_occurs == 1 && count == 1
         level.values[idx][1] = value
         return argument.stop

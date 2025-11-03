@@ -7,6 +7,7 @@ using Cliff
     @test arg.names == ["--name", "-n"]
     @test arg.default == ["guest"]
     @test arg.has_default
+    @test arg.min_occurs == 0
     @test !arg.positional
 
     flag = Argument("--verbose"; flag = true, default = "false")
@@ -34,9 +35,32 @@ using Cliff
     @test repeat_flag.min_occurs == 0
     @test repeat_flag.max_occurs == typemax(Int)
 
+    repeat_values = Argument("item"; repeat = true)
+    @test repeat_values.min_occurs == 0
+    @test repeat_values.max_occurs == typemax(Int)
+
     required_repeat_flag = Argument("--debug"; flag = true, required = true, repeat = true)
     @test required_repeat_flag.min_occurs == 1
     @test required_repeat_flag.max_occurs == typemax(Int)
+
+    choice_arg = Argument("mode"; choices = ["fast", "slow"], default = "fast")
+    @test choice_arg.choices == ["fast", "slow"]
+    @test !choice_arg.has_regex
+
+    regex_arg = Argument("--slug"; regex = r"^[a-z]+$", default = "slug", required = false)
+    @test regex_arg.has_regex
+    @test regex_arg.regex isa Regex
+
+    stop_arg = Argument("--help"; stop = true)
+    @test stop_arg.min_occurs == 0
+    @test !stop_arg.required
+
+    @test_throws ArgumentError Argument("value"; required = false)
+
+    @test_throws ArgumentError Argument("mode"; choices = String[])
+    @test_throws ArgumentError Argument("mode"; choices = ["fast"], default = "slow")
+    @test_throws ArgumentError Argument("--flag"; flag = true, default = "no", flag_value = "yes", choices = ["on", "off"])
+    @test_throws ArgumentError Argument("--slug"; regex = r"^[a-z]+$", default = "UPPER")
 end
 
 @testset "Basic parsing" begin
@@ -76,6 +100,49 @@ end
     @test args["input", Vector{String}] == ["input.txt"]
     @test args["--threads", Vector{String}] == ["4"]
     @test args["output", Vector{String}] == ["out.txt"]
+end
+
+@testset "Value validation" begin
+    parser = Parser(
+        arguments = [
+            Argument("mode"; choices = ["fast", "slow"]),
+            Argument("--name"; regex = r"^[a-z]+$", default = "alpha", required = false),
+            Argument("--tag"; choices = ["red", "blue"], repeat = true)
+        ]
+    )
+
+    args = parser(["fast", "--name", "alpha", "--tag", "red", "--tag", "blue"]; error_mode = :throw)
+
+    @test args["mode"] == "fast"
+    @test args["--name"] == "alpha"
+    @test args["--tag", Vector{String}] == ["red", "blue"]
+
+    err_choice = try
+        parser(["medium"]; error_mode = :throw)
+    catch err
+        err
+    end
+    @test err_choice isa ParseError
+    @test err_choice.kind == :invalid_value
+    @test occursin("fast", err_choice.message)
+
+    err_regex = try
+        parser(["fast", "--name", "Alpha"]; error_mode = :throw)
+    catch err
+        err
+    end
+    @test err_regex isa ParseError
+    @test err_regex.kind == :invalid_value
+    @test occursin("pattern", err_regex.message)
+
+    err_tag = try
+        parser(["fast", "--tag", "green"]; error_mode = :throw)
+    catch err
+        err
+    end
+    @test err_tag isa ParseError
+    @test err_tag.kind == :invalid_value
+    @test occursin("red", err_tag.message)
 end
 
 @testset "Command disambiguation" begin
@@ -143,7 +210,7 @@ end
     @test args["task"] == "build"
 
     optional = Parser(
-        arguments = [Argument("maybe"; required = false)],
+        arguments = [Argument("maybe"; repeat = true)],
         commands = [Command("go")]
     )
 
@@ -255,8 +322,8 @@ end
             Argument("--count"; default = "42"),
             Argument("--ratio"; default = "3.14"),
             Argument("--flag"; flag = true),
-            Argument("--ints"; max_repeat = :inf, required = false),
-            Argument("--floats"; max_repeat = :inf, required = false)
+            Argument("--ints"; repeat = true),
+            Argument("--floats"; repeat = true)
         ]
     )
 
@@ -329,7 +396,7 @@ end
 
 @testset "Double dash behaviour" begin
     parser = Parser(
-        arguments = [Argument("name"), Argument("rest"; required = false)],
+        arguments = [Argument("name"), Argument("rest"; repeat = true)],
         commands = [
             Command("cmd";
                 arguments = [Argument("--flag"; flag = true), Argument("value")]
