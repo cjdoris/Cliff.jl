@@ -216,7 +216,12 @@ function _determine_occurrences(required::Bool, repeat, min_repeat, max_repeat)
         throw(ArgumentError("Cannot specify repeat together with min_repeat or max_repeat"))
     end
     if repeat !== nothing
-        min_occurs, max_occurs = _normalize_repeat_spec(repeat)
+        if repeat === true
+            min_occurs = required ? 1 : 0
+            max_occurs = _UNBOUNDED
+        else
+            min_occurs, max_occurs = _normalize_repeat_spec(repeat)
+        end
     end
     if min_repeat !== nothing
         min_occurs = _normalize_repeat_value(min_repeat, "Minimum occurrences")
@@ -546,13 +551,30 @@ function _consume_short_option!(levels::Vector{LevelResult}, argv::Vector{String
     end
     eq_index = findfirst(==('='), token)
     if eq_index === nothing
-        _throw_parse_error(
-            :unsupported_short_option,
-            "Unsupported short option bundle: $(token)",
-            command_path,
-            levels;
-            token = token,
-        )
+        stop_name = nothing
+        for pos in 2:length(token)
+            name = string('-', token[pos])
+            idx = _lookup_argument(level, name)
+            if idx === nothing
+                _throw_parse_error(:unknown_option, "Unknown option: $(name)", command_path, levels; token = name)
+            end
+            argument = level.arguments[idx]
+            if !argument.flag
+                _throw_parse_error(
+                    :unsupported_short_option,
+                    "Unsupported short option bundle: $(token)",
+                    command_path,
+                    levels;
+                    token = token,
+                )
+            end
+            triggered = _set_flag!(level, idx, command_path, levels)
+            if triggered
+                stop_name = name
+                break
+            end
+        end
+        return i + 1, stop_name
     end
     name = token[1:eq_index - 1]
     value = token[eq_index + 1:end]
@@ -756,9 +778,39 @@ function Base.getindex(args::Parsed, name::String, ::Type{T}) where {T}
     return _convert_value(T, value)
 end
 
+function Base.getindex(args::Parsed, name::String, ::Type{Int})
+    level, idx = _find_level_index(args, name)
+    if level === nothing
+        throw(KeyError(name))
+    end
+    argument = level.arguments[idx]
+    if argument.flag
+        return level.counts[idx]
+    end
+    value = _single_value(level, idx)
+    return _convert_value(Int, value)
+end
+
 function Base.getindex(args::Parsed, name::String, depth::Integer, ::Type{T}) where {T}
     value = args[name, depth]
     return _convert_value(T, value)
+end
+
+function Base.getindex(args::Parsed, name::String, depth::Integer, ::Type{Int})
+    if depth < 0 || depth + 1 > length(args.levels)
+        throw(ArgumentError("Invalid depth: $(depth)"))
+    end
+    level = args.levels[depth + 1]
+    idx = _lookup_argument(level, name)
+    if idx === nothing
+        throw(KeyError(name))
+    end
+    argument = level.arguments[idx]
+    if argument.flag
+        return level.counts[idx]
+    end
+    value = _single_value(level, idx)
+    return _convert_value(Int, value)
 end
 
 function Base.getindex(args::Parsed, name::String, ::Type{Vector{T}}) where {T}
