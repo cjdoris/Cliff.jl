@@ -53,9 +53,10 @@ parser = Parser(
     ]
 )
 
-args = parser(["run", "fast", "--threads", "8", "task-name"])
+args = parser(["input.txt", "run", "task-name", "fast", "--threads", "8"])
 
 println(args.command)             # ["run", "fast"]
+println(args["input"])           # "input.txt"
 println(args["task"])            # "task-name"
 println(args["--threads", Int])  # 8
 println(args["--verbose", Bool]) # false
