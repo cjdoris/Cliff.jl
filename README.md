@@ -1,6 +1,6 @@
-# Cliff.jl
+# 🏔️ Cliff.jl
 
-Cliff is a lightweight, type-stable argument parsing library for Julia. It provides three building blocks:
+🏔️ Cliff (the "command line interface factory," or CLI factory) is a lightweight, type-stable argument parsing library for Julia built to help you assemble polished CLIs without fuss. It provides three building blocks:
 
 - `Argument` – defines positional arguments, short options, long options, and flags.
 - `Command` – describes a sub-command with its own arguments and nested sub-commands.
@@ -29,6 +29,8 @@ Values are stored as strings but can be converted when accessed from a `Parsed` 
 This allows you to keep your parser definitions declarative while still retrieving strongly typed values at the call site.
 
 ## Quick Start
+
+In code, bring 🏔️ Cliff into scope with `using Cliff`:
 
 ```julia
 using Cliff
@@ -82,4 +84,4 @@ println(args["--threads", Vector{String}])  # ["8"]
 
 ## Status
 
-Cliff intentionally focuses on the core parsing features above. Suggestions for additional capabilities are welcome as follow-up work.
+🏔️ Cliff intentionally focuses on the core parsing features above. Suggestions for additional capabilities are welcome as follow-up work.
