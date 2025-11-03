@@ -29,6 +29,14 @@ using Cliff
     @test custom_flag.flag_value == "enabled"
 
     @test_throws ArgumentError Argument("value"; flag_value = "on")
+
+    repeat_flag = Argument("--verbose"; flag = true, repeat = true)
+    @test repeat_flag.min_occurs == 0
+    @test repeat_flag.max_occurs == typemax(Int)
+
+    required_repeat_flag = Argument("--debug"; flag = true, required = true, repeat = true)
+    @test required_repeat_flag.min_occurs == 1
+    @test required_repeat_flag.max_occurs == typemax(Int)
 end
 
 @testset "Basic parsing" begin
@@ -156,11 +164,13 @@ end
     @test args["--count", Int] == 5
     @test args["--dry-run", Bool]
     @test args["--dry-run", Vector{String}] == ["true"]
+    @test args["--dry-run", Int] == 1
 
     args2 = parser(["-c", "7"]; error_mode = :throw)
     @test args2["-c", String] == "7"
     @test !args2["--dry-run", Bool]
     @test args2["--dry-run", Vector{String}] == ["false"]
+    @test args2["--dry-run", Int] == 0
 
     args3 = parser(["--count=8", "--dry-run"]; error_mode = :throw)
     @test args3["--count", Int] == 8
@@ -196,6 +206,11 @@ end
 
     @test_throws ParseError parser(["--count"]; error_mode = :throw)
     @test_throws ParseError parser(["--unknown", "value"]; error_mode = :throw)
+
+    repeat_parser = Parser(arguments = [Argument(["--verbose", "-v"]; flag = true, repeat = true)])
+    repeat_args = repeat_parser(["-vvv", "--verbose"]; error_mode = :throw)
+    @test repeat_args["--verbose", Int] == 4
+    @test repeat_args["--verbose", Vector{String}] == ["true", "true", "true", "true"]
 end
 
 @testset "Stop arguments" begin
