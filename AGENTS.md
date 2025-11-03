@@ -10,7 +10,7 @@ This file applies to the entire repository.
 - Respect Julia style conventions (use 4-space indentation, descriptive function names, and avoid unnecessary type assertions).
 - Do not auto-generate usage strings from the parser.
 - Support `--` to disable option parsing while still allowing sub-command detection.
-- Flags should be retrievable via `parsed[Bool, "--flag-name"]`.
+- Flags should be retrievable via `args[Bool, "--flag-name"]`.
 
 ## Testing
 - Provide and maintain tests in `test/runtests.jl`.

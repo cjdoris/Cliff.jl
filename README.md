@@ -6,7 +6,7 @@ Cliff is a lightweight, type-stable argument parsing library for Julia. It provi
 - `Command` – describes a sub-command with its own arguments and nested sub-commands.
 - `Parser` – top-level parser that aggregates arguments and commands.
 
-Parsing command line arguments returns a `Parsed` object that exposes convenient indexing for retrieving values as strings or strongly typed data.
+Parsing command line arguments returns a `Parsed` object—typically stored in a variable named `args`—that exposes convenient indexing for retrieving values as strings or strongly typed data.
 
 ## Features
 
@@ -14,7 +14,7 @@ Parsing command line arguments returns a `Parsed` object that exposes convenient
 - Nested sub-commands with disambiguation of arguments by command depth.
 - Explicit handling of `--` to stop option parsing while still allowing sub-command detection.
 - Repeatable positional arguments, options, and flags with configurable occurrence ranges.
-- Retrieval helpers such as `parsed["name"]`, `parsed["name", depth]`, `parsed[Type, "name"]`, and `parsed[Vector{T}, "name"]` (or the shorthand `parsed[T, +, "name"]`).
+- Retrieval helpers such as `args["name"]`, `args["name", depth]`, `args[Type, "name"]`, and `args[Vector{T}, "name"]` (or the shorthand `args[T, +, "name"]`).
 - No implicit `--help` handling and no automatic usage string generation.
 
 ## Quick Start
@@ -40,15 +40,15 @@ parser = Parser(
     ]
 )
 
-parsed = parser(["run", "fast", "--threads", "8", "task-name"])
+args = parser(["run", "fast", "--threads", "8", "task-name"])
 
-println(parsed.command)             # ["run", "fast"]
-println(parsed["task"])            # "task-name"
-println(parsed[Int, "--threads"])  # 8
-println(parsed[Bool, "--verbose"]) # false
+println(args.command)             # ["run", "fast"]
+println(args["task"])            # "task-name"
+println(args[Int, "--threads"])  # 8
+println(args[Bool, "--verbose"]) # false
 
 # Collect repeated values
-println(parsed[Vector{String}, "--threads"])  # ["8"]
+println(args[Vector{String}, "--threads"])  # ["8"]
 ```
 
 ## Development
