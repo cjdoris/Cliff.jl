@@ -91,6 +91,11 @@ end
     @test !args2[Bool, "--dry-run"]
     @test args2[Vector{String}, "--dry-run"] == ["false"]
 
+    args3 = parser(["--count=8", "--dry-run"])
+    @test args3[Int, "--count"] == 8
+    @test args3[Bool, "--dry-run"]
+    @test args3[Vector{String}, "--dry-run"] == ["true"]
+
     @test_throws ArgumentError parser(["--count"])
     @test_throws ArgumentError parser(["--unknown", "value"])
 end
