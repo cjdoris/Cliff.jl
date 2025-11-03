@@ -11,6 +11,7 @@ This file applies to the entire repository.
 - Do not auto-generate usage strings from the parser.
 - Support `--` to disable option parsing while still allowing sub-command detection.
 - Flags should be retrievable via `args[Bool, "--flag-name"]`.
+- Always read the README.
 
 ## Testing
 - Provide and maintain tests in `test/runtests.jl`.
