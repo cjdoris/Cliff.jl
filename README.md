@@ -37,6 +37,9 @@ See `examples/example.jl` for a more detailed walk-through of nested commands, t
 - Apply `choices` to constrain input to an explicit allowlist and `regex` to enforce pattern matching.
 - Repeatable positional arguments, options, and flags with configurable occurrence ranges.
 - Arguments that can terminate parsing early via `stop = true` (ideal for `--help`).
+- Short options must be exactly two characters long (for example `-h`).
+- Defaults can be numeric or structured Julia values—Cliff stores them using `repr` so `default = 5` or `default = [1, 2, 3]` behave as expected.
+- Inline values for short options treat everything after the option as the value, so `-x=3` parses as option `-x` with the value `"=3"`.
 
 ### Command orchestration
 
@@ -77,7 +80,7 @@ This allows you to keep your parser definitions declarative while still retrievi
 
 Cliff can validate incoming values without custom code:
 
-- `choices = [...]` forces inputs to match a curated allowlist. Defaults and explicit `flag_value`s must appear in the same list.
+- `choices = [...]` forces inputs to match a curated allowlist. Defaults must appear in the same list, and flags require both `"0"` and `"1"` when choices are provided.
 - `regex = r"..."` requires each value to match the supplied pattern.
 - Use `required = false` to assert that an argument stays optional; Cliff raises an error if no sensible default exists.
 
@@ -129,15 +132,9 @@ println(args["--verbose", Bool]) # false
 println(args["--tag", Vector{String}])      # ["demo", "release"]
 ```
 
-#### Flags and `flag_value`
+#### Flags and counts
 
-Flags default to the string "false" when omitted, so `args["--verbose", Bool]` returns `false` unless the flag appears on the command line. When a flag is present it adopts a value that can be customised via the `flag_value` keyword. If you omit `flag_value` Cliff picks a sensible opposite of the default ("true" ↔ "false", "yes" ↔ "no", "on" ↔ "off", etc.) and falls back to "true" for anything else:
-
-```julia
-Argument("--confirm"; flag = true, default = "no")        # -> "no" / "yes"
-Argument("--enable"; flag = true)                          # -> "false" / "true"
-Argument("--mode"; flag = true, default = "disabled", flag_value = "enabled")
-```
+Flags default to the string "0" and record "1" for every occurrence. `args["--verbose", Bool]` therefore returns `false` unless the flag appears on the command line, `args["--verbose"]` yields "0" or "1", and `args["--verbose", Int]` reports the number of times the flag was provided. When a flag is absent `args["--verbose", Vector{T}]` returns an empty vector, making it easy to detect whether users opted in.
 
 ### Early stopping and error handling
 
@@ -168,7 +165,7 @@ parse(help_parser, String[]; error_mode = :exit)    # -> prints message and exit
 
 ### Examples
 
-`examples/example.jl` demonstrates all core features—including nested commands, positional and option defaults, value validation, repeating arguments, early stopping, and error handling. Run it with different argument lists to see how `Parsed` changes:
+`examples/example.jl` demonstrates all core features—including nested commands, positional and option defaults, value validation, repeating arguments, early stopping, and error handling. The script prints `@show` summaries for top-level arguments and active sub-commands, exits on error, and honours `--help` stops. Run it with different argument lists to see how `Parsed` changes:
 
 ```bash
 julia --project examples/example.jl --help

@@ -4,7 +4,7 @@ using Cliff
 subtools = Parser(
     arguments = [
         Argument("--tool"; choices = ["hammer", "saw", "wrench"], default = "hammer"),
-        Argument("--list"; flag = true, default = "no", flag_value = "yes")
+        Argument("--list"; flag = true)
     ],
     commands = [
         Command("set";
@@ -56,46 +56,48 @@ parser = Parser(
 
 args = parser(error_mode = :return)
 
-function describe_level(io::IO, args::Parsed, depth::Int, root_label::String)
-    level = args.levels[depth]
-    label = depth == 1 ? root_label : args.command[depth - 1]
-    println(io, "level $(depth - 1) ($(label)):")
-    for argument in level.arguments
-        name = argument.names[1]
-        values = args[name, depth - 1, Vector{String}]
-        line = "  $(name): $(repr(values))"
-        if argument.flag && argument.max_occurs == 1
-            line *= " (bool=$(args[name, depth - 1, Bool]))"
-        end
-        println(io, line)
+if !args.success
+    if args.error !== nothing
+        println(stderr, args.error.message)
+    else
+        println(stderr, "Failed to parse arguments")
     end
+    exit(1)
 end
 
-println("success: $(args.success)")
-println("complete: $(args.complete)")
-println("stopped: $(args.stopped)")
-println("stop argument: $(args.stop_argument === nothing ? "(none)" : args.stop_argument)")
-if args.error !== nothing
-    println("error kind: $(args.error.kind)")
-    println("error message: $(args.error.message)")
-end
+@show args.command
 
-println("command path: $(args.command)")
-for depth in eachindex(args.levels)
-    describe_level(stdout, args, depth, parser.name == "" ? "root" : parser.name)
-end
+help_hits = args["--help", 0, Int]
+@show help_hits
+help_hits > 0 && exit(0)
 
-println("count as Int: ", args["--count", Int])
-println("tags: ", repr(args["--tag", Vector{String}]))
-println("profile: ", args["--profile"])
+@show args["target"]
+@show args["--count", Int]
+@show args["--tag", Vector{String}]
+@show args["--verbose", Bool]
+@show args["--profile"]
+@show args["--label", Vector{String}]
 
-label_values = args["--label", Vector{String}]
-println("label: ", isempty(label_values) ? "(none)" : label_values[1])
-
-if args.success && !isempty(args.command)
+if !isempty(args.command)
     if args.command[1] == "run"
-        println("threads (Int): ", args["--threads", Int])
+        @show args["mode", 1]
+        @show args["--threads", 1, Int]
+        @show args["--repeat", 1, +]
+        @show args["--dry-run", 1, Bool]
+        if length(args.command) > 1
+            if args.command[2] == "fast"
+                @show args["--limit", 2, Int]
+                @show args["--extra", 2, +]
+            elseif args.command[2] == "slow"
+                @show args["--interval", 2, Int]
+            end
+        end
     elseif args.command[1] == "tools"
-        println("tool: ", args["--tool"])
+        @show args["--tool", 1]
+        @show args["--list", 1, Bool]
+        if length(args.command) > 1 && args.command[2] == "set"
+            @show args["key", 2]
+            @show args["value", 2]
+        end
     end
 end
