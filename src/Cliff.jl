@@ -3,12 +3,12 @@ module Cliff
 export Argument, Command, Parser, Parsed, ParseError
 
 """
-    Argument(names...; required=false, default=nothing, flag=false, stop=false,
+    Argument(names; required=false, default=nothing, flag=false, stop=false,
              min_occurs=1, max_occurs=1, choices=nothing, regex=nothing)
 
 Define a positional argument, option, or flag.
 
-Construct with one or more names (strings or vectors of strings) and optional
+Construct with a single `names` argument (string or vector of strings) and optional
 keyword arguments such as `required`, `default`, `flag`, `stop`, and
 repetition controls.
 
@@ -51,20 +51,19 @@ struct Argument
 end
 
 """
-    Command(names...; arguments=Argument[], commands=Command[], usages=String[])
+    Command(names, [arguments], [commands])
 
 Describe a command or sub-command with its own `arguments` and nested
 `commands`.
 
-Construct with one or more names followed by keyword arguments for the
-argument list, nested commands, and usage strings.
+Construct with a single `names` argument plus positional collections for the
+argument list and nested commands.
 
 Public fields:
 
   * `names::Vector{String}` – aliases recognised for the command.
   * `arguments::Vector{Argument}` – command-scoped arguments.
   * `commands::Vector{Command}` – nested sub-commands.
-  * `usages::Vector{String}` – user-defined usage strings.
   * `argument_lookup::Dict{String, Int}` – mapping from argument name to index
     (exposed for introspection, though generally internal).
   * `positional_indices::Vector{Int}` – order of positional arguments.
@@ -74,33 +73,27 @@ struct Command
     names::Vector{String}
     arguments::Vector{Argument}
     commands::Vector{Command}
-    usages::Vector{String}
     argument_lookup::Dict{String, Int}
     positional_indices::Vector{Int}
     command_lookup::Dict{String, Int}
 end
 
 """
-    Parser(name=""; arguments=Argument[], commands=Command[], usages=String[])
+    Parser([arguments], [commands])
 
-Create a top-level parser with optional global arguments, nested commands, and
-usage strings.
+Create a top-level parser with optional global arguments and nested commands.
 
 Use `parser(argv)` or `parse(parser, argv)` to obtain a `Parsed` result. Once
 constructed, the following fields constitute the public API:
 
-  * `name::String` – optional label for the parser (used in diagnostics).
   * `arguments::Vector{Argument}` – arguments accepted at the current level.
   * `commands::Vector{Command}` – immediate sub-commands.
-  * `usages::Vector{String}` – custom usage strings.
   * `argument_lookup`, `positional_indices`, `command_lookup` – lookup tables
     provided for advanced inspection and tooling.
 """
 struct Parser
-    name::String
     arguments::Vector{Argument}
     commands::Vector{Command}
-    usages::Vector{String}
     argument_lookup::Dict{String, Int}
     positional_indices::Vector{Int}
     command_lookup::Dict{String, Int}
@@ -205,26 +198,27 @@ end
 # Internal helpers
 
 """
-    _collect_names(names...)
+    _collect_names(names)
 
-Internal helper used by `Argument`, `Command`, and `Parser` constructors to
-flatten name inputs, ensure uniqueness, and normalise them to `String`.
-
-Accepts individual strings or vectors of strings.
+Internal helper used by `Argument` and `Command` constructors to normalise name
+inputs. Accepts a single string or a collection of strings and returns a
+de-duplicated `Vector{String}`.
 """
-function _collect_names(names...)
+function _collect_names(names)
     collected = String[]
     seen = Dict{String, Bool}()
-    for name in names
-        if name isa AbstractString
-            _push_name!(collected, seen, String(name))
-        elseif name isa AbstractVector{<:AbstractString}
-            for item in name
+    if names isa AbstractString
+        _push_name!(collected, seen, String(names))
+    elseif names isa AbstractVector{<:AbstractString} || names isa Tuple
+        for item in names
+            if item isa AbstractString
                 _push_name!(collected, seen, String(item))
+            else
+                throw(ArgumentError("Argument names must be strings"))
             end
-        else
-            throw(ArgumentError("Argument names must be strings"))
         end
+    else
+        throw(ArgumentError("Argument names must be strings"))
     end
     if isempty(collected)
         throw(ArgumentError("At least one name must be provided"))
@@ -486,8 +480,8 @@ element is stored in the order provided, making `default = [1, 2, 3]` suitable
 for repeatable arguments. Internally this constructor validates combinations
 and prepares lookup tables consumed by `Parser`.
 """
-function Argument(names...; required::Union{Bool, Nothing} = nothing, default = nothing, flag::Bool = false, flag_value = nothing, stop::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing, choices = nothing, regex = nothing)
-    collected = _collect_names(names...)
+function Argument(names; required::Union{Bool, Nothing} = nothing, default = nothing, flag::Bool = false, flag_value = nothing, stop::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing, choices = nothing, regex = nothing)
+    collected = _collect_names(names)
     positional = any(!startswith(name, "-") for name in collected)
     option = any(startswith(name, "-") for name in collected)
     if positional && option
@@ -576,50 +570,62 @@ function Argument(names...; required::Union{Bool, Nothing} = nothing, default = 
 end
 
 """
-    Command(names...; arguments=Argument[], commands=Command[], usages=String[])
+    Command(names, arguments, commands)
+    Command(names, arguments)
+    Command(names, commands)
+    Command(names)
 
-Create a command or sub-command. Provide one or more names plus optional
-`arguments`, nested `commands`, and `usages`. Commands can be nested directly
-or constructed from an existing `Parser` using `Command(name, parser)`.
+Create a command or sub-command. Provide a `names` argument plus positional
+arguments for the command-local `arguments` and nested `commands`. Commands can
+be nested directly or constructed from an existing `Parser` using
+`Command(name, parser)`.
 """
-function Command(names...; arguments = Argument[], commands = Command[], usages = String[])
-    collected = _collect_names(names...)
+function Command(names, arguments::Vector{Argument}, commands::Vector{Command})
+    collected = _collect_names(names)
     args_vec = Vector{Argument}(arguments)
     cmds_vec = Vector{Command}(commands)
-    usages_vec = String.(usages)
     argument_lookup = _build_argument_lookup(args_vec)
     positional_indices = _build_positional_indices(args_vec)
     command_lookup = _build_command_lookup(cmds_vec)
-    return Command(collected, args_vec, cmds_vec, usages_vec, argument_lookup, positional_indices, command_lookup)
+    return Command(collected, args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup)
 end
+
+Command(names, arguments::Vector{Argument}) = Command(names, arguments, Command[])
+Command(names, commands::Vector{Command}) = Command(names, Argument[], commands)
+Command(names) = Command(names, Argument[], Command[])
 
 """
     Command(name::AbstractString, nested::Parser)
 
 Wrap an existing parser so it can be mounted as a sub-command. The nested
-parser's arguments, commands, and usages are copied into the resulting
-`Command`.
+parser's arguments and commands are copied into the resulting `Command`.
 """
 function Command(name::AbstractString, nested::Parser)
-    return Command(name; arguments = nested.arguments, commands = nested.commands, usages = nested.usages)
+    return Command(name, nested.arguments, nested.commands)
 end
 
 """
-    Parser(; name="", arguments=Argument[], commands=Command[], usages=String[])
+    Parser(arguments, commands)
+    Parser(arguments)
+    Parser(commands)
+    Parser()
 
 Construct a top-level parser. Arguments and commands apply to the root level.
 Invoking the parser with `parser(argv)` (or `parse(parser, argv)`) returns a
 `Parsed` value that exposes indexing helpers and error diagnostics.
 """
-function Parser(; name::AbstractString = "", arguments = Argument[], commands = Command[], usages = String[])
+function Parser(arguments::Vector{Argument}, commands::Vector{Command})
     args_vec = Vector{Argument}(arguments)
     cmds_vec = Vector{Command}(commands)
-    usages_vec = String.(usages)
     argument_lookup = _build_argument_lookup(args_vec)
     positional_indices = _build_positional_indices(args_vec)
     command_lookup = _build_command_lookup(cmds_vec)
-    return Parser(String(name), args_vec, cmds_vec, usages_vec, argument_lookup, positional_indices, command_lookup)
+    return Parser(args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup)
 end
+
+Parser(arguments::Vector{Argument}) = Parser(arguments, Command[])
+Parser(commands::Vector{Command}) = Parser(Argument[], commands)
+Parser() = Parser(Argument[], Command[])
 
 """
     _init_level(arguments, lookup, positional_indices)
@@ -1027,7 +1033,7 @@ function _execute_parse(parser::Parser, argv::Vector{String})
     allow_options = true
     command_requirements = Bool[!isempty(parser.commands)]
     command_satisfied = Bool[false]
-    level_labels = String[parser.name == "" ? "parser" : parser.name]
+    level_labels = String["parser"]
     level_is_root = Bool[true]
     stopped = false
     stop_argument = nothing
