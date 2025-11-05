@@ -3,32 +3,20 @@ using Cliff
 
 @testset "Argument construction" begin
     arg = Argument(["--name", "-n"]; default = "guest")
-    @test arg.flag == false
+    @test !arg.flag
     @test arg.names == ["--name", "-n"]
     @test arg.default == ["guest"]
     @test arg.has_default
     @test arg.min_occurs == 0
     @test !arg.positional
 
-    flag = Argument("--verbose"; flag = true, default = "false")
+    flag = Argument("--verbose"; flag = true)
     @test flag.flag
-    @test flag.default == ["false"]
-    @test flag.has_default
-    @test flag.flag_value == "true"
+    @test !flag.has_default
+    @test flag.default == String[]
+    @test flag.flag_value == "1"
 
-    auto_flag = Argument("--debug"; flag = true)
-    @test auto_flag.default == ["false"]
-    @test auto_flag.flag_value == "true"
-
-    yes_flag = Argument("--answer"; flag = true, default = "no")
-    @test yes_flag.flag_value == "yes"
-
-    upper_flag = Argument("--power"; flag = true, default = "OFF")
-    @test upper_flag.flag_value == "ON"
-
-    custom_flag = Argument("--mode"; flag = true, default = "disabled", flag_value = "enabled")
-    @test custom_flag.flag_value == "enabled"
-
+    @test_throws ArgumentError Argument("--answer"; flag = true, default = "0")
     @test_throws ArgumentError Argument("value"; flag_value = "on")
 
     repeat_flag = Argument("--verbose"; flag = true, repeat = true)
@@ -55,11 +43,23 @@ using Cliff
     @test stop_arg.min_occurs == 0
     @test !stop_arg.required
 
-    @test_throws ArgumentError Argument("value"; required = false)
+    numeric_default = Argument("--count"; default = 5)
+    @test numeric_default.default == ["5"]
 
+    vector_default = Argument("--numbers"; repeat = true, default = [1, "two", 3.5])
+    @test vector_default.default == ["1", "two", "3.5"]
+
+    valid_flag_choices = Argument("--toggle"; flag = true, choices = ["0", "1"])
+    @test valid_flag_choices.flag
+    @test valid_flag_choices.flag_value == "1"
+    @test_throws ArgumentError Argument("--broken"; flag = true, choices = ["1"])
+    @test_throws ArgumentError Argument("--badregex"; flag = true, regex = r"^1$")
+
+    @test_throws ArgumentError Argument("value"; required = false)
     @test_throws ArgumentError Argument("mode"; choices = String[])
     @test_throws ArgumentError Argument("mode"; choices = ["fast"], default = "slow")
-    @test_throws ArgumentError Argument("--flag"; flag = true, default = "no", flag_value = "yes", choices = ["on", "off"])
+    @test_throws ArgumentError Argument(["-help"])
+    @test_throws ArgumentError Argument(["--flag", "-ab"])
     @test_throws ArgumentError Argument("--slug"; regex = r"^[a-z]+$", default = "UPPER")
 end
 
@@ -230,39 +230,34 @@ end
     args = parser(["--count", "5", "--dry-run"]; error_mode = :throw)
     @test args["--count", Int] == 5
     @test args["--dry-run", Bool]
-    @test args["--dry-run", Vector{String}] == ["true"]
+    @test args["--dry-run", Vector{String}] == ["1"]
     @test args["--dry-run", Int] == 1
 
     args2 = parser(["-c", "7"]; error_mode = :throw)
     @test args2["-c", String] == "7"
     @test !args2["--dry-run", Bool]
-    @test args2["--dry-run", Vector{String}] == ["false"]
+    @test args2["--dry-run", Vector{String}] == String[]
     @test args2["--dry-run", Int] == 0
+    @test args2["--dry-run"] == "0"
 
     args3 = parser(["--count=8", "--dry-run"]; error_mode = :throw)
     @test args3["--count", Int] == 8
     @test args3["--dry-run", Bool]
-    @test args3["--dry-run", Vector{String}] == ["true"]
+    @test args3["--dry-run", Vector{String}] == ["1"]
+
+    args4 = parser(["-c=9"]; error_mode = :throw)
+    @test args4["--count"] == "=9"
+    @test_throws ArgumentError args4["--count", Int]
 
     auto = Parser(arguments = [Argument("--toggle"; flag = true)])
     auto_default = auto(String[]; error_mode = :throw)
+    @test auto_default["--toggle"] == "0"
     @test !auto_default["--toggle", Bool]
-    @test auto_default["--toggle", Vector{String}] == ["false"]
+    @test auto_default["--toggle", Vector{String}] == String[]
     toggled = auto(["--toggle"]; error_mode = :throw)
-    @test toggled["--toggle"] == "true"
+    @test toggled["--toggle"] == "1"
     @test toggled["--toggle", Bool]
-
-    yesno = Parser(arguments = [Argument("--answer"; flag = true, default = "no")])
-    yesno_default = yesno(String[]; error_mode = :throw)
-    @test yesno_default["--answer"] == "no"
-    @test !yesno_default["--answer", Bool]
-    yesno_on = yesno(["--answer"]; error_mode = :throw)
-    @test yesno_on["--answer"] == "yes"
-    @test yesno_on["--answer", Bool]
-
-    custom = Parser(arguments = [Argument("--mode"; flag = true, default = "disabled", flag_value = "enabled")])
-    custom_args = custom(["--mode"]; error_mode = :throw)
-    @test custom_args["--mode"] == "enabled"
+    @test toggled["--toggle", Vector{String}] == ["1"]
 
     implicit = Parser(arguments = [Argument("--name"; default = String[])])
     implicit_args = implicit(String[]; error_mode = :throw)
@@ -277,7 +272,7 @@ end
     repeat_parser = Parser(arguments = [Argument(["--verbose", "-v"]; flag = true, repeat = true)])
     repeat_args = repeat_parser(["-vvv", "--verbose"]; error_mode = :throw)
     @test repeat_args["--verbose", Int] == 4
-    @test repeat_args["--verbose", Vector{String}] == ["true", "true", "true", "true"]
+    @test repeat_args["--verbose", Vector{String}] == ["1", "1", "1", "1"]
 end
 
 @testset "Stop arguments" begin
@@ -315,6 +310,21 @@ end
     @test help_sub["--help", Bool]
 end
 
+@testset "Unicode options" begin
+    parser = Parser(arguments = [Argument(["--animal", "-🐾"])])
+    args = parser(["-🐾🦊"]; error_mode = :throw)
+    @test args["--animal"] == "🦊"
+
+    args_eq = parser(["-🐾=🦊"]; error_mode = :throw)
+    @test args_eq["--animal"] == "=🦊"
+    @test_throws ArgumentError args_eq["--animal", Int]
+
+    flag_parser = Parser(arguments = [Argument(["--loud", "-✓"]; flag = true, repeat = true)])
+    loud = flag_parser(["-✓✓"]; error_mode = :throw)
+    @test loud["--loud", Int] == 2
+    @test loud["--loud", Vector{String}] == ["1", "1"]
+end
+
 @testset "Typed retrieval" begin
     parser = Parser(
         arguments = [
@@ -323,7 +333,8 @@ end
             Argument("--ratio"; default = "3.14"),
             Argument("--flag"; flag = true),
             Argument("--ints"; repeat = true),
-            Argument("--floats"; repeat = true)
+            Argument("--floats"; repeat = true),
+            Argument("--preset"; repeat = true, default = [1, 2, 3])
         ]
     )
 
@@ -348,14 +359,16 @@ end
     @test args["--ints", Int, +] == [1, 2]
     @test args["--floats", Vector{Float64}] == [0.5, 1.5]
     @test args["--floats", Float64, +] == [0.5, 1.5]
+    @test args["--preset", Vector{Int}] == [1, 2, 3]
 
     defaults = parser(["value"]; error_mode = :throw)
     @test defaults["--count", Int] == 42
     @test defaults["--ratio", Float64] == 3.14
     @test !defaults["--flag", Bool]
-    @test defaults["--flag", Vector{Bool}] == [false]
+    @test defaults["--flag", Vector{Bool}] == Bool[]
     @test defaults["--ints", Vector{Int}] == Int[]
     @test defaults["--floats", Vector{Float64}] == Float64[]
+    @test defaults["--preset", Vector{Int}] == [1, 2, 3]
 end
 
 @testset "Repeatable arguments" begin
@@ -449,4 +462,38 @@ end
     @test_throws ArgumentError Argument("name"; flag = true)
     @test_throws ArgumentError Command("cmd", "cmd")
     @test_throws ArgumentError Parser(arguments = [Argument("a"), Argument("a")])
+end
+
+@testset "Example script" begin
+    example = joinpath(@__DIR__, "..", "examples", "example.jl")
+    project = joinpath(@__DIR__, "..")
+    function run_example(args::Vector{String})
+        stdout = IOBuffer()
+        stderr = IOBuffer()
+        base = Base.julia_cmd()
+        exec = vcat(base.exec, ["--project=$(project)", example], args)
+        cmd = base.env === nothing ? Cmd(exec) : Cmd(exec; env = base.env)
+        pipeline_cmd = pipeline(cmd; stdout = stdout, stderr = stderr)
+        ok = success(pipeline_cmd)
+        return ok, String(take!(stdout)), String(take!(stderr))
+    end
+
+    ok, out, err = run_example(["project", "--count", "2", "--tag", "demo", "--verbose", "run", "quick", "--threads", "6", "--repeat", "once", "--dry-run", "fast", "--limit", "5", "--extra", "alpha"])
+    @test ok
+    @test occursin("args.command = [\"run\", \"fast\"]", out)
+    @test occursin("help_hits = 0", out)
+    @test occursin("args[\"target\"] = \"project\"", out)
+    @test occursin("args[\"--verbose\", Bool] = true", out)
+    @test isempty(err)
+
+    ok_help, out_help, err_help = run_example(["--help"])
+    @test ok_help
+    @test occursin("args.command = String[]", out_help)
+    @test occursin("help_hits = 1", out_help)
+    @test isempty(err_help)
+
+    ok_fail, out_fail, err_fail = run_example(String[])
+    @test !ok_fail
+    @test isempty(out_fail)
+    @test occursin("Missing required argument", err_fail)
 end
