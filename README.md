@@ -5,13 +5,11 @@ Cliff, the Command Line InterFace Factory, is a lightweight, type-stable argumen
 ```julia
 using Cliff
 
-hello = Parser(
-    arguments = [
-        Argument("name"),
-        Argument("--uppercase"; flag = true),
-        Argument("--excitement"; default = "1"),
-    ],
-)
+hello = Parser([
+    Argument("name"),
+    Argument("--uppercase"; flag = true),
+    Argument("--excitement"; default = "1"),
+])
 
 function greet(argv)
     args = hello(argv)
@@ -99,25 +97,17 @@ Bring Cliff into scope with `using Cliff` and assemble your parser from the buil
 ```julia
 using Cliff
 
-parser = Parser(
-    arguments = [
-        Argument("input"),
-        Argument(["--count", "-c"]; default = "1"),
-        Argument("--tag"; repeat = true),
-        Argument("--mode"; choices = ["fast", "slow"], default = "fast"),
-        Argument("--verbose"; flag = true)
-    ],
-    commands = [
-        Command("run";
-            arguments = [Argument("task")],
-            commands = [
-                Command("fast";
-                    arguments = [Argument("--threads"; default = "4")]
-                )
-            ]
-        )
-    ]
-)
+parser = Parser([
+    Argument("input"),
+    Argument(["--count", "-c"]; default = "1"),
+    Argument("--tag"; repeat = true),
+    Argument("--mode"; choices = ["fast", "slow"], default = "fast"),
+    Argument("--verbose"; flag = true)
+], [
+    Command("run", [Argument("task")], [
+        Command("fast", [Argument("--threads"; default = "4")])
+    ])
+])
 
 args = parser(["input.txt", "--tag", "demo", "--tag", "release", "run", "task-name", "fast", "--threads", "8"])
 
@@ -141,13 +131,12 @@ Flags default to the string "0" and record "1" for every occurrence. `args["--ve
 Mark any argument with `stop = true` to halt parsing once that argument (and any associated value) has been consumed. Cliff treats these arguments as optional so they never block required-argument checks. This is particularly handy for implementing manual `--help` handling:
 
 ```julia
-help_parser = Parser(
-    arguments = [
-        Argument("input"),
-        Argument("--help"; flag = true, stop = true)
-    ],
-    commands = [Command("run"; arguments = [Argument("task")])]
-)
+help_parser = Parser([
+    Argument("input"),
+    Argument("--help"; flag = true, stop = true)
+], [
+    Command("run", [Argument("task")])
+])
 
 help_args = help_parser(["--help"])
 help_args.stopped        # true

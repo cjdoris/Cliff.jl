@@ -1,58 +1,42 @@
 #!/usr/bin/env julia
 using Cliff
 
-subtools = Parser(
-    arguments = [
-        Argument("--tool"; choices = ["hammer", "saw", "wrench"], default = "hammer"),
-        Argument("--list"; flag = true)
-    ],
-    commands = [
-        Command("set";
-            arguments = [
-                Argument("key"),
-                Argument("value")
-            ]
-        )
-    ]
-)
+subtools = Parser([
+    Argument("--tool"; choices = ["hammer", "saw", "wrench"], default = "hammer"),
+    Argument("--list"; flag = true)
+], [
+    Command("set", [
+        Argument("key"),
+        Argument("value")
+    ])
+])
 
-parser = Parser(
-    name = "example",
-    arguments = [
-        Argument("target"),
-        Argument(["--count", "-c"]; default = "1"),
-        Argument("--tag"; repeat = true),
-        Argument("--help"; flag = true, stop = true),
-        Argument("--verbose"; flag = true),
-        Argument("--profile"; choices = ["debug", "release"], default = "debug"),
-        Argument("--label"; regex = r"^[a-z0-9_-]+$", default = String[])
-    ],
-    commands = [
-        Command("run";
-            arguments = [
-                Argument("mode"),
-                Argument(["--threads", "-t"]; default = "4"),
-                Argument("--repeat"; repeat = 1:3, choices = ["once", "twice", "thrice"]),
-                Argument("--dry-run"; flag = true),
-                Argument("--help"; flag = true, stop = true)
-            ],
-            commands = [
-                Command("fast";
-                    arguments = [
-                        Argument("--limit"; default = "10"),
-                        Argument("--extra"; repeat = true)
-                    ]
-                ),
-                Command("slow";
-                    arguments = [
-                        Argument("--interval"; default = "5")
-                    ]
-                )
-            ]
-        ),
-        Command("tools", subtools)
-    ]
-)
+parser = Parser([
+    Argument("target"),
+    Argument(["--count", "-c"]; default = "1"),
+    Argument("--tag"; repeat = true),
+    Argument("--help"; flag = true, stop = true),
+    Argument("--verbose"; flag = true),
+    Argument("--profile"; choices = ["debug", "release"], default = "debug"),
+    Argument("--label"; regex = r"^[a-z0-9_-]+$", default = String[])
+], [
+    Command("run", [
+        Argument("mode"),
+        Argument(["--threads", "-t"]; default = "4"),
+        Argument("--repeat"; repeat = 1:3, choices = ["once", "twice", "thrice"]),
+        Argument("--dry-run"; flag = true),
+        Argument("--help"; flag = true, stop = true)
+    ], [
+        Command("fast", [
+            Argument("--limit"; default = "10"),
+            Argument("--extra"; repeat = true)
+        ]),
+        Command("slow", [
+            Argument("--interval"; default = "5")
+        ])
+    ]),
+    Command("tools", subtools)
+])
 
 args = parser(error_mode = :return)
 

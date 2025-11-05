@@ -64,26 +64,18 @@ using Cliff
 end
 
 @testset "Basic parsing" begin
-    parser = Parser(
-        arguments = [
-            Argument("input"),
-            Argument("output"; default = "out.txt")
-        ],
-        commands = [
-            Command("run";
-                arguments = [
-                    Argument("task"),
-                    Argument(["--threads", "-t"]; default = "1"),
-                    Argument("--verbose"; flag = true)
-                ],
-                commands = [
-                    Command("fast";
-                        arguments = [Argument("--limit"; default = "10")]
-                    )
-                ]
-            )
-        ]
-    )
+    parser = Parser([
+        Argument("input"),
+        Argument("output"; default = "out.txt")
+    ], [
+        Command("run", [
+            Argument("task"),
+            Argument(["--threads", "-t"]; default = "1"),
+            Argument("--verbose"; flag = true)
+        ], [
+            Command("fast", [Argument("--limit"; default = "10")])
+        ])
+    ])
 
     args = parser(["input.txt", "run", "build", "--threads", "4", "--verbose", "fast", "--limit", "20"]; error_mode = :throw)
 
@@ -103,13 +95,11 @@ end
 end
 
 @testset "Value validation" begin
-    parser = Parser(
-        arguments = [
-            Argument("mode"; choices = ["fast", "slow"]),
-            Argument("--name"; regex = r"^[a-z]+$", default = "alpha", required = false),
-            Argument("--tag"; choices = ["red", "blue"], repeat = true)
-        ]
-    )
+    parser = Parser([
+        Argument("mode"; choices = ["fast", "slow"]),
+        Argument("--name"; regex = r"^[a-z]+$", default = "alpha", required = false),
+        Argument("--tag"; choices = ["red", "blue"], repeat = true)
+    ])
 
     args = parser(["fast", "--name", "alpha", "--tag", "red", "--tag", "blue"]; error_mode = :throw)
 
@@ -146,16 +136,12 @@ end
 end
 
 @testset "Command disambiguation" begin
-    parser = Parser(
-        arguments = [Argument("item")],
-        commands = [
-            Command("alpha"; arguments = [Argument("item")]),
-            Command("beta";
-                arguments = [Argument("item")],
-                commands = [Command("deep"; arguments = [Argument("item")])]
-            )
-        ]
-    )
+    parser = Parser([
+        Argument("item")
+    ], [
+        Command("alpha", [Argument("item")]),
+        Command("beta", [Argument("item")], [Command("deep", [Argument("item")])])
+    ])
 
     args = parser(["top", "beta", "middle", "deep", "leaf"]; error_mode = :throw)
 
@@ -166,18 +152,14 @@ end
 end
 
 @testset "Command from parser" begin
-    nested = Parser(
-        arguments = [
-            Argument("child"),
-            Argument("--mode"; default = "slow")
-        ],
-        commands = [
-            Command("leaf"; arguments = [Argument("value")])
-        ],
-        usages = ["child usage"]
-    )
+    nested = Parser([
+        Argument("child"),
+        Argument("--mode"; default = "slow")
+    ], [
+        Command("leaf", [Argument("value")])
+    ])
 
-    parent = Parser(commands = [Command("nested", nested)])
+    parent = Parser([Command("nested", nested)])
 
     args = parent(["nested", "alpha", "--mode", "fast", "leaf", "omega"]; error_mode = :throw)
 
@@ -190,15 +172,11 @@ end
 end
 
 @testset "Command ordering" begin
-    parser = Parser(
-        arguments = [Argument("input")],
-        commands = [
-            Command("run";
-                arguments = [Argument("task")],
-                commands = [Command("fast")]
-            )
-        ]
-    )
+    parser = Parser([
+        Argument("input")
+    ], [
+        Command("run", [Argument("task")], [Command("fast")])
+    ])
 
     @test_throws ParseError parser(["run"]; error_mode = :throw)
     @test_throws ParseError parser(["input.txt"]; error_mode = :throw)
@@ -209,10 +187,11 @@ end
     @test args["input"] == "input.txt"
     @test args["task"] == "build"
 
-    optional = Parser(
-        arguments = [Argument("maybe"; repeat = true)],
-        commands = [Command("go")]
-    )
+    optional = Parser([
+        Argument("maybe"; repeat = true)
+    ], [
+        Command("go")
+    ])
 
     parsed_optional = optional(["go"]; error_mode = :throw)
     @test parsed_optional.command == ["go"]
@@ -220,12 +199,10 @@ end
 end
 
 @testset "Option handling" begin
-    parser = Parser(
-        arguments = [
-            Argument(["--count", "-c"]; default = "0"),
-            Argument("--dry-run"; flag = true)
-        ]
-    )
+    parser = Parser([
+        Argument(["--count", "-c"]; default = "0"),
+        Argument("--dry-run"; flag = true)
+    ])
 
     args = parser(["--count", "5", "--dry-run"]; error_mode = :throw)
     @test args["--count", Int] == 5
@@ -249,7 +226,7 @@ end
     @test args4["--count"] == "=9"
     @test_throws ArgumentError args4["--count", Int]
 
-    auto = Parser(arguments = [Argument("--toggle"; flag = true)])
+    auto = Parser([Argument("--toggle"; flag = true)])
     auto_default = auto(String[]; error_mode = :throw)
     @test auto_default["--toggle"] == "0"
     @test !auto_default["--toggle", Bool]
@@ -259,7 +236,7 @@ end
     @test toggled["--toggle", Bool]
     @test toggled["--toggle", Vector{String}] == ["1"]
 
-    implicit = Parser(arguments = [Argument("--name"; default = String[])])
+    implicit = Parser([Argument("--name"; default = String[])])
     implicit_args = implicit(String[]; error_mode = :throw)
     @test implicit_args["--name"] == ""
     @test implicit_args["--name", Vector{String}] == String[]
@@ -269,28 +246,22 @@ end
     @test_throws ParseError parser(["--count"]; error_mode = :throw)
     @test_throws ParseError parser(["--unknown", "value"]; error_mode = :throw)
 
-    repeat_parser = Parser(arguments = [Argument(["--verbose", "-v"]; flag = true, repeat = true)])
+    repeat_parser = Parser([Argument(["--verbose", "-v"]; flag = true, repeat = true)])
     repeat_args = repeat_parser(["-vvv", "--verbose"]; error_mode = :throw)
     @test repeat_args["--verbose", Int] == 4
     @test repeat_args["--verbose", Vector{String}] == ["1", "1", "1", "1"]
 end
 
 @testset "Stop arguments" begin
-    parser = Parser(
-        arguments = [
-            Argument("input"),
+    parser = Parser([
+        Argument("input"),
+        Argument("--help"; flag = true, stop = true)
+    ], [
+        Command("run", [
+            Argument("task"),
             Argument("--help"; flag = true, stop = true)
-        ],
-        commands = [
-            Command("run";
-                arguments = [
-                    Argument("task"),
-                    Argument("--help"; flag = true, stop = true)
-                ],
-                commands = [Command("fast")]
-            )
-        ]
-    )
+        ], [Command("fast")])
+    ])
 
     help_root = parser(["--help"]; error_mode = :return)
     @test help_root.success
@@ -311,7 +282,7 @@ end
 end
 
 @testset "Unicode options" begin
-    parser = Parser(arguments = [Argument(["--animal", "-🐾"])])
+    parser = Parser([Argument(["--animal", "-🐾"])])
     args = parser(["-🐾🦊"]; error_mode = :throw)
     @test args["--animal"] == "🦊"
 
@@ -319,24 +290,22 @@ end
     @test args_eq["--animal"] == "=🦊"
     @test_throws ArgumentError args_eq["--animal", Int]
 
-    flag_parser = Parser(arguments = [Argument(["--loud", "-✓"]; flag = true, repeat = true)])
+    flag_parser = Parser([Argument(["--loud", "-✓"]; flag = true, repeat = true)])
     loud = flag_parser(["-✓✓"]; error_mode = :throw)
     @test loud["--loud", Int] == 2
     @test loud["--loud", Vector{String}] == ["1", "1"]
 end
 
 @testset "Typed retrieval" begin
-    parser = Parser(
-        arguments = [
-            Argument("name"),
-            Argument("--count"; default = "42"),
-            Argument("--ratio"; default = "3.14"),
-            Argument("--flag"; flag = true),
-            Argument("--ints"; repeat = true),
-            Argument("--floats"; repeat = true),
-            Argument("--preset"; repeat = true, default = [1, 2, 3])
-        ]
-    )
+    parser = Parser([
+        Argument("name"),
+        Argument("--count"; default = "42"),
+        Argument("--ratio"; default = "3.14"),
+        Argument("--flag"; flag = true),
+        Argument("--ints"; repeat = true),
+        Argument("--floats"; repeat = true),
+        Argument("--preset"; repeat = true, default = [1, 2, 3])
+    ])
 
     args = parser([
         "value",
@@ -372,14 +341,12 @@ end
 end
 
 @testset "Repeatable arguments" begin
-    parser = Parser(
-        arguments = [
-            Argument("--multi"; repeat = 2:4),
-            Argument("--numbers"; min_repeat = 1, max_repeat = :inf),
-            Argument("pos"; repeat = 1:3),
-            Argument("--flag"; flag = true, max_repeat = :inf)
-        ]
-    )
+    parser = Parser([
+        Argument("--multi"; repeat = 2:4),
+        Argument("--numbers"; min_repeat = 1, max_repeat = :inf),
+        Argument("pos"; repeat = 1:3),
+        Argument("--flag"; flag = true, max_repeat = :inf)
+    ])
 
     args = parser([
         "--multi", "one",
@@ -408,14 +375,15 @@ end
 end
 
 @testset "Double dash behaviour" begin
-    parser = Parser(
-        arguments = [Argument("name"), Argument("rest"; repeat = true)],
-        commands = [
-            Command("cmd";
-                arguments = [Argument("--flag"; flag = true), Argument("value")]
-            )
-        ]
-    )
+    parser = Parser([
+        Argument("name"),
+        Argument("rest"; repeat = true)
+    ], [
+        Command("cmd", [
+            Argument("--flag"; flag = true),
+            Argument("value")
+        ])
+    ])
 
     args = parser(["alpha", "--", "cmd", "--flag", "beta"]; error_mode = :throw)
     @test args.command == ["cmd"]
@@ -427,7 +395,7 @@ end
 end
 
 @testset "Error modes" begin
-    parser = Parser(arguments = [Argument("required")])
+    parser = Parser([Argument("required")])
 
     @test_throws ParseError parser(String[]; error_mode = :throw)
 
@@ -451,17 +419,17 @@ end
 end
 
 @testset "Type conversion errors" begin
-    parser = Parser(arguments = [Argument("value")])
+    parser = Parser([Argument("value")])
     args = parser(["abc"]; error_mode = :throw)
     @test_throws ArgumentError args["value", Int]
     @test args["value", String] == "abc"
 end
 
 @testset "Invalid constructions" begin
-    @test_throws ArgumentError Argument("name", "--flag")
+    @test_throws ArgumentError Argument(["name", "--flag"])
     @test_throws ArgumentError Argument("name"; flag = true)
-    @test_throws ArgumentError Command("cmd", "cmd")
-    @test_throws ArgumentError Parser(arguments = [Argument("a"), Argument("a")])
+    @test_throws ArgumentError Command(["cmd", "cmd"])
+    @test_throws ArgumentError Parser([Argument("a"), Argument("a")])
 end
 
 @testset "Example script" begin
