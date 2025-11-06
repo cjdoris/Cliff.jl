@@ -31,6 +31,17 @@ using Cliff
     @test required_repeat_flag.min_occurs == 1
     @test required_repeat_flag.max_occurs == typemax(Int)
 
+    repeat_range_optional = Argument("range"; repeat = 0:3, required = false)
+    @test repeat_range_optional.min_occurs == 0
+    @test repeat_range_optional.max_occurs == 3
+
+    repeat_tuple_optional = Argument("tuple"; repeat = (0, 2), required = false)
+    @test repeat_tuple_optional.min_occurs == 0
+    @test repeat_tuple_optional.max_occurs == 2
+
+    min_repeat_optional = Argument("min"; min_repeat = 0, required = false)
+    @test min_repeat_optional.min_occurs == 0
+
     choice_arg = Argument("mode"; choices = ["fast", "slow"], default = "fast")
     @test choice_arg.choices == ["fast", "slow"]
     @test !choice_arg.has_regex
