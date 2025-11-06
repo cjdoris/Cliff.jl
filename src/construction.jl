@@ -47,6 +47,8 @@ struct Argument
     has_regex::Bool
     regex::Regex
     auto_help::Bool
+    help::String
+    help_val::String
 end
 
 """
@@ -80,6 +82,7 @@ struct Command
     command_lookup::Dict{String, Int}
     positional_after_first::Bool
     auto_help::Bool
+    help::String
 end
 
 """
@@ -102,6 +105,8 @@ struct Parser
     positional_indices::Vector{Int}
     command_lookup::Dict{String, Int}
     positional_after_first::Bool
+    help::String
+    help_program::String
 end
 
 """
@@ -213,23 +218,23 @@ function _auto_help_argument(arguments::Vector{Argument})
     return nothing
 end
 
-function _construct_command(names::Vector{String}, arguments::Vector{Argument}, commands::Vector{Command}, positional_after_first::Bool, auto_help::Bool)
+function _construct_command(names::Vector{String}, arguments::Vector{Argument}, commands::Vector{Command}, positional_after_first::Bool, auto_help::Bool, help::String)
     name_vec = Vector{String}(names)
     args_vec = Vector{Argument}(arguments)
     cmds_vec = Vector{Command}(commands)
     argument_lookup = _build_argument_lookup(args_vec)
     positional_indices = _build_positional_indices(args_vec)
     command_lookup = _build_command_lookup(cmds_vec)
-    return Command(name_vec, args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup, positional_after_first, auto_help)
+    return Command(name_vec, args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup, positional_after_first, auto_help, help)
 end
 
-function _construct_parser(arguments::Vector{Argument}, commands::Vector{Command}, positional_after_first::Bool)
+function _construct_parser(arguments::Vector{Argument}, commands::Vector{Command}, positional_after_first::Bool, help::String, help_program::String)
     args_vec = Vector{Argument}(arguments)
     cmds_vec = Vector{Command}(commands)
     argument_lookup = _build_argument_lookup(args_vec)
     positional_indices = _build_positional_indices(args_vec)
     command_lookup = _build_command_lookup(cmds_vec)
-    return Parser(args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup, positional_after_first)
+    return Parser(args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup, positional_after_first, help, help_program)
 end
 
 function _propagate_auto_help_to_commands(commands::Vector{Command}, inherited::Union{Nothing, Argument})
@@ -262,7 +267,7 @@ function _propagate_auto_help(command::Command, inherited::Union{Nothing, Argume
     if inserted || children_changed
         final_args = inserted ? args_vec : command.arguments
         final_commands = children_changed ? commands_vec : command.commands
-        return _construct_command(command.names, final_args, final_commands, command.positional_after_first, command.auto_help)
+        return _construct_command(command.names, final_args, final_commands, command.positional_after_first, command.auto_help, command.help)
     else
         return command
     end
@@ -272,7 +277,7 @@ function _propagate_auto_help(parser::Parser)
     auto_help_argument = _auto_help_argument(parser.arguments)
     commands_vec, changed = _propagate_auto_help_to_commands(parser.commands, auto_help_argument)
     if changed
-        return _construct_parser(parser.arguments, commands_vec, parser.positional_after_first)
+        return _construct_parser(parser.arguments, commands_vec, parser.positional_after_first, parser.help, parser.help_program)
     else
         return parser
     end
@@ -463,7 +468,7 @@ element is stored in the order provided, making `default = [1, 2, 3]` suitable
 for repeatable arguments. Internally this constructor validates combinations
 and prepares lookup tables consumed by `Parser`.
 """
-function Argument(names; required::Union{Bool, Nothing} = nothing, default = nothing, flag::Bool = false, flag_value = nothing, stop::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing, choices = nothing, regex = nothing, auto_help::Bool = false)
+function Argument(names; required::Union{Bool, Nothing} = nothing, default = nothing, flag::Bool = false, flag_value = nothing, stop::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing, choices = nothing, regex = nothing, auto_help::Bool = false, help::AbstractString = "", help_val::Union{Nothing, AbstractString} = nothing)
     collected = _collect_names(names)
     positional = any(!startswith(name, "-") for name in collected)
     option = any(startswith(name, "-") for name in collected)
@@ -553,7 +558,10 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
             end
         end
     end
-    return Argument(collected, min_occurs > 0, flag, stop, has_default, default_values, positional, min_occurs, max_occurs, computed_flag_value, choice_values, has_regex, regex_obj, auto_help)
+    help_string = String(help)
+    default_help_val = positional ? uppercase(first(collected)) : "VAL"
+    help_val_string = help_val === nothing ? default_help_val : String(help_val)
+    return Argument(collected, min_occurs > 0, flag, stop, has_default, default_values, positional, min_occurs, max_occurs, computed_flag_value, choice_values, has_regex, regex_obj, auto_help, help_string, help_val_string)
 end
 
 """
@@ -567,18 +575,19 @@ arguments for the command-local `arguments` and nested `commands`. Commands can
 be nested directly or constructed from an existing `Parser` using
 `Command(name, parser)`.
 """
-function Command(names, arguments::Vector{Argument}, commands::Vector{Command}; positional_after_first::Bool = false, auto_help::Bool = true)
+function Command(names, arguments::Vector{Argument}, commands::Vector{Command}; positional_after_first::Bool = false, auto_help::Bool = true, help::AbstractString = "")
     collected = _collect_names(names)
-    base = _construct_command(collected, arguments, commands, positional_after_first, auto_help)
+    help_str = String(help)
+    base = _construct_command(collected, arguments, commands, positional_after_first, auto_help, help_str)
     return _propagate_auto_help(base, nothing)
 end
 
-Command(names, arguments::Vector{Argument}; positional_after_first::Bool = false, auto_help::Bool = true) =
-    Command(names, arguments, Command[]; positional_after_first = positional_after_first, auto_help = auto_help)
-Command(names, commands::Vector{Command}; positional_after_first::Bool = false, auto_help::Bool = true) =
-    Command(names, Argument[], commands; positional_after_first = positional_after_first, auto_help = auto_help)
-Command(names; positional_after_first::Bool = false, auto_help::Bool = true) =
-    Command(names, Argument[]; positional_after_first = positional_after_first, auto_help = auto_help)
+Command(names, arguments::Vector{Argument}; positional_after_first::Bool = false, auto_help::Bool = true, help::AbstractString = "") =
+    Command(names, arguments, Command[]; positional_after_first = positional_after_first, auto_help = auto_help, help = help)
+Command(names, commands::Vector{Command}; positional_after_first::Bool = false, auto_help::Bool = true, help::AbstractString = "") =
+    Command(names, Argument[], commands; positional_after_first = positional_after_first, auto_help = auto_help, help = help)
+Command(names; positional_after_first::Bool = false, auto_help::Bool = true, help::AbstractString = "") =
+    Command(names, Argument[]; positional_after_first = positional_after_first, auto_help = auto_help, help = help)
 
 """
     Command(name::AbstractString, nested::Parser)
@@ -587,7 +596,7 @@ Wrap an existing parser so it can be mounted as a sub-command. The nested
 parser's arguments and commands are copied into the resulting `Command`.
 """
 function Command(name::AbstractString, nested::Parser; positional_after_first::Bool = false)
-    return Command(name, nested.arguments, nested.commands; positional_after_first = positional_after_first, auto_help = false)
+    return Command(name, nested.arguments, nested.commands; positional_after_first = positional_after_first, auto_help = false, help = nested.help)
 end
 
 """
@@ -600,14 +609,14 @@ Construct a top-level parser. Arguments and commands apply to the root level.
 Invoking the parser with `parser(argv)` (or `parse(parser, argv)`) returns a
 `Parsed` value that exposes indexing helpers and error diagnostics.
 """
-function Parser(arguments::Vector{Argument}, commands::Vector{Command}; positional_after_first::Bool = false)
-    base = _construct_parser(arguments, commands, positional_after_first)
+function Parser(arguments::Vector{Argument}, commands::Vector{Command}; positional_after_first::Bool = false, help::AbstractString = "", help_program::AbstractString = "")
+    base = _construct_parser(arguments, commands, positional_after_first, String(help), String(help_program))
     return _propagate_auto_help(base)
 end
 
-Parser(arguments::Vector{Argument}; positional_after_first::Bool = false) =
-    Parser(arguments, Command[]; positional_after_first = positional_after_first)
-Parser(commands::Vector{Command}; positional_after_first::Bool = false) =
-    Parser(Argument[], commands; positional_after_first = positional_after_first)
-Parser(; positional_after_first::Bool = false) =
-    Parser(Argument[]; positional_after_first = positional_after_first)
+Parser(arguments::Vector{Argument}; positional_after_first::Bool = false, help::AbstractString = "", help_program::AbstractString = "") =
+    Parser(arguments, Command[]; positional_after_first = positional_after_first, help = help, help_program = help_program)
+Parser(commands::Vector{Command}; positional_after_first::Bool = false, help::AbstractString = "", help_program::AbstractString = "") =
+    Parser(Argument[], commands; positional_after_first = positional_after_first, help = help, help_program = help_program)
+Parser(; positional_after_first::Bool = false, help::AbstractString = "", help_program::AbstractString = "") =
+    Parser(Argument[]; positional_after_first = positional_after_first, help = help, help_program = help_program)

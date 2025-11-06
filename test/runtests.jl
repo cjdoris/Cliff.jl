@@ -54,6 +54,17 @@ using Cliff
     vector_default = Argument("--numbers"; repeat = true, default = [1, "two", 3.5])
     @test vector_default.default == ["1", "two", "3.5"]
 
+    positional_help = Argument("input")
+    @test positional_help.help == ""
+    @test positional_help.help_val == "INPUT"
+
+    option_help = Argument(["--output", "-o"])
+    @test option_help.help_val == "VAL"
+
+    custom_help = Argument("path"; help = "Select the path.", help_val = "FILE")
+    @test custom_help.help == "Select the path."
+    @test custom_help.help_val == "FILE"
+
     valid_flag_choices = Argument("--toggle"; flag = true, choices = ["0", "1"])
     @test valid_flag_choices.flag
     @test valid_flag_choices.flag_value == "1"
@@ -204,15 +215,15 @@ end
 end
 
 @testset "Auto help" begin
-    root_help = Argument("--help"; auto_help = true)
-    beta_help = Argument("--help"; auto_help = true)
+    root_help = Argument("--help"; auto_help = true, help = "Show this help and exit.")
+    beta_help = Argument("--help"; auto_help = true, help = "Show beta help.")
     parser = Parser([
         root_help
     ], [
-        Command("alpha", [Argument("item")]),
-        Command("beta", [beta_help], [Command("nested", [Argument("value")])]),
-        Command("gamma", [Argument("value")]; auto_help = false)
-    ])
+        Command("alpha", [Argument("item"; help = "The alpha item.")]; help = "Alpha command."),
+        Command("beta", [beta_help], [Command("nested", [Argument("value"; help = "Nested value.")]; help = "Nested command.")]; help = "Beta command."),
+        Command("gamma", [Argument("value")]; auto_help = false, help = "Gamma command.")
+    ]; help_program = "<program>")
 
     @test parser.commands[1].auto_help
     @test parser.commands[1].arguments[1].auto_help
@@ -231,11 +242,13 @@ end
     io = IOBuffer()
     Cliff._print_basic_help(io, parser, root_result, root_depth)
     output = String(take!(io))
-    @test occursin("Usage: <program>", output)
-    @test occursin("Options:", output)
+    @test occursin("<program> [options] COMMAND ...", output)
+    @test occursin("Options", output)
     @test occursin("--help", output)
-    @test occursin("Sub-commands:", output)
+    @test occursin("Commands", output)
     @test occursin("alpha", output)
+    @test occursin("Show this help and exit.", output)
+    @test occursin("Alpha command.", output)
 
     beta_result = parser(["beta", "--help"]; error_mode = :return)
     @test beta_result.stopped
@@ -244,10 +257,12 @@ end
     beta_io = IOBuffer()
     Cliff._print_basic_help(beta_io, parser, beta_result, beta_depth)
     beta_output = String(take!(beta_io))
-    @test occursin("Usage: <program> beta", beta_output)
-    @test occursin("Options:", beta_output)
-    @test occursin("Sub-commands:", beta_output)
+    @test occursin("<program> beta [options] COMMAND ...", beta_output)
+    @test occursin("Options", beta_output)
+    @test occursin("Commands", beta_output)
     @test occursin("nested", beta_output)
+    @test occursin("Beta command.", beta_output)
+    @test occursin("Show beta help.", beta_output)
 
     nested_result = parser(["beta", "nested", "--help"]; error_mode = :return)
     @test nested_result.stopped
@@ -256,8 +271,11 @@ end
     nested_io = IOBuffer()
     Cliff._print_basic_help(nested_io, parser, nested_result, nested_depth)
     nested_output = String(take!(nested_io))
-    @test occursin("Usage: <program> beta nested value", nested_output)
-    @test occursin("Options:", nested_output)
+    @test occursin("<program> beta nested [options] VALUE", nested_output)
+    @test occursin("Options", nested_output)
+    @test occursin("Arguments", nested_output)
+    @test occursin("Nested command.", nested_output)
+    @test occursin("Nested value.", nested_output)
 
     return_result = parser(["--help"]; error_mode = :return)
     @test return_result.stopped
