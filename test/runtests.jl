@@ -88,6 +88,17 @@ using Cliff
     @test_throws ArgumentError Argument(["-help"])
     @test_throws ArgumentError Argument(["--flag", "-ab"])
     @test_throws ArgumentError Argument("--slug"; regex = r"^[a-z]+$", default = "UPPER")
+    @test_throws ArgumentError Argument(["--flag", 42])
+    @test_throws ArgumentError Argument(42)
+    @test_throws ArgumentError Argument(String[])
+    @test_throws ArgumentError Argument("neg-min"; min_repeat = -1)
+    @test_throws ArgumentError Argument("neg-max"; max_repeat = -1)
+    @test_throws ArgumentError Argument("bad-max"; max_repeat = :invalid)
+    @test_throws ArgumentError Argument("neg-repeat"; repeat = -1)
+    @test_throws ArgumentError Argument("step-repeat"; repeat = 0:2:4)
+    @test_throws ArgumentError Argument("decreasing-repeat"; repeat = 2:1)
+    @test_throws ArgumentError Argument("float-repeat"; repeat = 0:1:1.5)
+    @test_throws ArgumentError Argument("too-many-defaults"; max_repeat = 1, default = ["a", "b"])
 end
 
 @testset "Basic parsing" begin
@@ -119,6 +130,9 @@ end
     @test args["input", Vector{String}] == ["input.txt"]
     @test args["--threads", Vector{String}] == ["4"]
     @test args["output", Vector{String}] == ["out.txt"]
+    @test_throws KeyError args["--missing"]
+    @test_throws ArgumentError args["--threads", 5]
+    @test_throws KeyError args["--threads", 0]
 end
 
 @testset "Value validation" begin
@@ -343,6 +357,17 @@ end
     @test args4["--count"] == "=9"
     @test_throws ArgumentError args4["--count", Int]
 
+    @test_throws ParseError parser(["-c"]; error_mode = :throw)
+    @test_throws ParseError parser(["--dry-run=true"]; error_mode = :throw)
+
+    short_flags = Parser([
+        Argument(["--alpha", "-a"]; flag = true),
+        Argument(["--beta", "-b"])
+    ])
+    @test_throws ParseError short_flags(["-a=1"]; error_mode = :throw)
+    @test_throws ParseError short_flags(["-ab"]; error_mode = :throw)
+    @test_throws ParseError short_flags(["-az"]; error_mode = :throw)
+
     auto = Parser([Argument("--toggle"; flag = true)])
     auto_default = auto(String[]; error_mode = :throw)
     @test auto_default["--toggle"] == "0"
@@ -396,6 +421,13 @@ end
     @test help_sub.command == ["run"]
     @test help_sub["input"] == "input.txt"
     @test help_sub["--help", Bool]
+
+    stop_positional = Parser([
+        Argument("item"; stop = true)
+    ])
+    stop_result = stop_positional(["value"]; error_mode = :return)
+    @test stop_result.stopped
+    @test stop_result.stop_argument == "item"
 end
 
 @testset "Unicode options" begin
@@ -491,6 +523,93 @@ end
     ]; error_mode = :throw)
 end
 
+@testset "Repeat helpers" begin
+    @test Cliff._repeat_allows_zero_min(true, nothing)
+    @test Cliff._repeat_allows_zero_min(0, nothing)
+    @test Cliff._repeat_allows_zero_min(0:3, nothing)
+    @test Cliff._repeat_allows_zero_min((0, 2), nothing)
+    @test !Cliff._repeat_allows_zero_min(nothing, nothing)
+    @test !Cliff._repeat_allows_zero_min(1:3, nothing)
+
+    @test Cliff._normalize_repeat_spec(2) == (2, 2)
+    @test_throws ArgumentError Cliff._normalize_repeat_spec(-1)
+    @test_throws ArgumentError Cliff._normalize_repeat_spec(0:2:4)
+    @test_throws ArgumentError Cliff._normalize_repeat_spec(2:1)
+    @test_throws ArgumentError Cliff._normalize_repeat_spec(0:1:1.5)
+    @test Cliff._normalize_repeat_spec((0, :inf)) == (0, typemax(Int))
+    @test Cliff._normalize_repeat_spec((1, nothing)) == (1, typemax(Int))
+    @test_throws ArgumentError Cliff._normalize_repeat_spec(:invalid)
+end
+
+@testset "Indexing errors" begin
+    parser = Parser([
+        Argument("root"),
+        Argument("--root-flag"; flag = true)
+    ], [
+        Command("child", [
+            Argument("value"),
+            Argument("--opt"; default = "alpha"),
+            Argument("--flag"; flag = true)
+        ])
+    ])
+
+    args = parser(["root", "child", "beta", "--flag"]; error_mode = :throw)
+
+    @test_throws KeyError args["--unknown"]
+    @test_throws ArgumentError args["root", -1]
+    @test_throws KeyError args["--opt", 0]
+    @test_throws ArgumentError args["--opt", Bool]
+    @test_throws KeyError args["--missing", Int]
+    @test_throws ArgumentError args["value", 5, Int]
+    @test_throws KeyError args["--opt", 0, Int]
+    @test args["--flag", Int] == 1
+    @test_throws KeyError args["--missing", Vector{String}]
+    @test_throws ArgumentError args["value", 5, Vector{String}]
+    @test_throws KeyError args["--opt", 0, Vector{String}]
+    @test args["value", Vector{String}] == ["beta"]
+    @test args["value", 1, String, +] == ["beta"]
+end
+
+@testset "Parsing edge cases" begin
+    parser = Parser([Argument("--name")])
+    args = parser(["--name", "first", "--name", "second"]; error_mode = :throw)
+    @test args["--name"] == "second"
+
+    limited = Parser([Argument("--item"; repeat = 1:2)])
+    @test_throws ParseError limited(["--item", "one", "--item", "two", "--item", "three"]; error_mode = :throw)
+
+    positional = Parser([Argument("value")])
+    @test_throws ParseError positional(["one", "two"]; error_mode = :throw)
+
+    unknown_short = Parser([Argument(["--verbose", "-v"]; flag = true)])
+    @test_throws ParseError unknown_short(["-v", "-x"]; error_mode = :throw)
+
+    inline_short_flag = Parser([Argument(["--quiet", "-q"]; flag = true)])
+    @test_throws ParseError inline_short_flag(["-q=1"]; error_mode = :throw)
+
+    bundle_non_flag = Parser([
+        Argument(["--alpha", "-a"]; flag = true),
+        Argument(["--beta", "-b"])
+    ])
+    @test_throws ParseError bundle_non_flag(["-ab"]; error_mode = :throw)
+
+    bundle_unknown = Parser([Argument(["--alpha", "-a"]; flag = true)])
+    @test_throws ParseError bundle_unknown(["-az"]; error_mode = :throw)
+
+    long_unknown = Parser([Argument("--flag"; flag = true)])
+    @test_throws ParseError long_unknown(["--unknown"]; error_mode = :throw)
+
+    long_missing_value = Parser([Argument("--value")])
+    @test_throws ParseError long_missing_value(["--value"]; error_mode = :throw)
+
+    positional_stop = Parser([Argument("item"; stop = true)])
+    stop_args = positional_stop(["item"]; error_mode = :throw)
+    @test stop_args.stopped
+    @test stop_args.stop_argument == "item"
+
+    @test sprint(showerror, ParseError(:custom, "message", String[], Cliff.LevelResult[], nothing, nothing, false, nothing)) == "message"
+end
+
 @testset "Double dash behaviour" begin
     parser = Parser([
         Argument("name"),
@@ -547,6 +666,7 @@ end
     @test_throws ArgumentError Argument("name"; flag = true)
     @test_throws ArgumentError Command(["cmd", "cmd"])
     @test_throws ArgumentError Parser([Argument("a"), Argument("a")])
+    @test_throws ArgumentError Command("parent", Argument[], [Command("dup"), Command("dup")])
 end
 
 @testset "Example script" begin

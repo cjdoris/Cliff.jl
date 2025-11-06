@@ -3,6 +3,7 @@ Manifest.toml
 
 # Build artifacts
 *.jl.cov
+*.jl.*.cov
 *.jl.mem
 *.ji
 
