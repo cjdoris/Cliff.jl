@@ -317,6 +317,26 @@ function _normalize_max(value)
     end
 end
 
+function _repeat_allows_zero_min(repeat, min_repeat)
+    if min_repeat !== nothing
+        return _normalize_repeat_value(min_repeat, "Minimum occurrences") == 0
+    elseif repeat === nothing
+        return false
+    elseif repeat === true
+        return true
+    elseif repeat isa Integer
+        return repeat == 0
+    elseif repeat isa AbstractRange
+        first_val = first(repeat)
+        return first_val isa Integer && Int(first_val) == 0
+    elseif repeat isa Tuple && length(repeat) == 2
+        min_spec, _ = repeat
+        return _normalize_repeat_value(min_spec, "Minimum occurrences") == 0
+    else
+        return false
+    end
+end
+
 """
     _normalize_repeat_spec(repeat)
 
@@ -523,7 +543,7 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
         end
     end
     computed_flag_value = flag ? "1" : ""
-    repeat_implies_optional = repeat === true
+    repeat_implies_optional = _repeat_allows_zero_min(repeat, min_repeat)
     has_sensible_default = has_default || flag || repeat_implies_optional || stop
     if required === false && !has_sensible_default
         throw(ArgumentError("required=false is only supported when the argument is optional by default"))
