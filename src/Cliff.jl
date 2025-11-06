@@ -1,5 +1,7 @@
 module Cliff
 
+using Markdown
+
 export Argument, Command, Parser, Parsed, ParseError
 
 include("construction.jl")

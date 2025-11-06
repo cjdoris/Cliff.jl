@@ -554,8 +554,19 @@ function _find_auto_help_stop_level(levels::Vector{LevelResult}, stop_argument::
     return nothing
 end
 
+function _help_program_placeholder(parser::Parser)
+    if !isempty(parser.help_program)
+        return parser.help_program
+    end
+    program_name = Base.PROGRAM_NAME
+    if program_name isa AbstractString && !isempty(program_name)
+        return String(program_name)
+    end
+    return "<program>"
+end
+
 function _resolve_help_target(parser::Parser, command_path::Vector{String}, depth::Int)
-    usage = String["<program>"]
+    usage = String[_help_program_placeholder(parser)]
     if depth <= 1
         return parser, usage
     end
@@ -577,39 +588,105 @@ function _resolve_help_target(parser::Parser, command_path::Vector{String}, dept
     return current, usage
 end
 
-function _print_basic_help(io::IO, parser::Parser, parsed::Parsed, depth::Int)
-    target, usage_path = _resolve_help_target(parser, parsed.command, depth)
-    usage_line = join(usage_path, " ")
-    positional = String[]
+function _usage_segments(target::Union{Parser, Command}, usage_path::Vector{String})
+    segments = copy(usage_path)
+    if any(!argument.positional for argument in target.arguments)
+        push!(segments, "[options]")
+    end
     for argument in target.arguments
         if argument.positional
-            push!(positional, first(argument.names))
-        end
-    end
-    if !isempty(positional)
-        usage_line = string(usage_line, " ", join(positional, " "))
-    end
-    println(io, "Usage: ", usage_line)
-    optionals = String[]
-    for argument in target.arguments
-        if !argument.positional
-            push!(optionals, join(argument.names, ", "))
-        end
-    end
-    if !isempty(optionals)
-        println(io)
-        println(io, "Options:")
-        for entry in optionals
-            println(io, "  ", entry)
+            push!(segments, argument.help_val)
         end
     end
     if !isempty(target.commands)
-        println(io)
-        println(io, "Sub-commands:")
-        for command in target.commands
-            println(io, "  ", first(command.names))
+        push!(segments, "COMMAND ...")
+    end
+    return segments
+end
+
+function _parsed_help(text::String)
+    return isempty(text) ? nothing : Markdown.parse(text)
+end
+
+function _append_help_blocks!(blocks::Vector{Any}, text::String)
+    help_md = _parsed_help(text)
+    if help_md !== nothing
+        append!(blocks, help_md.content)
+    end
+    return nothing
+end
+
+function _inline_code_list(strings::Vector{String})
+    nodes = Any[]
+    for (idx, value) in enumerate(strings)
+        push!(nodes, Markdown.Code("", value))
+        if idx < length(strings)
+            push!(nodes, ", ")
         end
     end
+    return nodes
+end
+
+function _option_display_names(argument::Argument)
+    if argument.flag
+        return argument.names
+    else
+        return [string(name, " ", argument.help_val) for name in argument.names]
+    end
+end
+
+function _option_inline_nodes(argument::Argument)
+    return _inline_code_list(_option_display_names(argument))
+end
+
+function _positional_inline_nodes(argument::Argument)
+    return Any[Markdown.Code("", argument.help_val)]
+end
+
+function _command_section_blocks(commands::Vector{Command})
+    entries = Any[]
+    for command in commands
+        push!(entries, Markdown.Paragraph(_inline_code_list(command.names)))
+        help_md = _parsed_help(command.help)
+        if help_md !== nothing
+            push!(entries, Markdown.BlockQuote(help_md.content))
+        end
+    end
+    if isempty(entries)
+        return Any[]
+    end
+    return vcat(Any[Markdown.Header("Commands", 2)], entries)
+end
+
+function _argument_section_blocks(arguments::Vector{Argument}, predicate::Function, title::String, inline_builder::Function)
+    entries = Any[]
+    for argument in arguments
+        if predicate(argument)
+            push!(entries, Markdown.Paragraph(inline_builder(argument)))
+            help_md = _parsed_help(argument.help)
+            if help_md !== nothing
+                push!(entries, Markdown.BlockQuote(help_md.content))
+            end
+        end
+    end
+    if isempty(entries)
+        return Any[]
+    end
+    return vcat(Any[Markdown.Header(title, 2)], entries)
+end
+
+function _print_basic_help(io::IO, parser::Parser, parsed::Parsed, depth::Int)
+    target, usage_path = _resolve_help_target(parser, parsed.command, depth)
+    usage_line = join(_usage_segments(target, usage_path), " ")
+    content = Any[]
+    push!(content, Markdown.Paragraph([Markdown.Code("", usage_line)]))
+    _append_help_blocks!(content, target.help)
+    append!(content, _command_section_blocks(target.commands))
+    append!(content, _argument_section_blocks(target.arguments, argument -> argument.positional, "Arguments", _positional_inline_nodes))
+    append!(content, _argument_section_blocks(target.arguments, argument -> !argument.positional, "Options", _option_inline_nodes))
+    md = Markdown.MD(content)
+    show(io, MIME"text/plain"(), md)
+    println(io)
     return nothing
 end
 
