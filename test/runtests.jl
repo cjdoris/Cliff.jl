@@ -43,6 +43,11 @@ using Cliff
     @test stop_arg.min_occurs == 0
     @test !stop_arg.required
 
+    auto_help_arg = Argument("--help"; auto_help = true)
+    @test auto_help_arg.auto_help
+    @test auto_help_arg.flag
+    @test auto_help_arg.stop
+
     numeric_default = Argument("--count"; default = 5)
     @test numeric_default.default == ["5"]
 
@@ -196,6 +201,69 @@ end
     parsed_optional = optional(["go"]; error_mode = :throw)
     @test parsed_optional.command == ["go"]
     @test parsed_optional["maybe", Vector{String}] == String[]
+end
+
+@testset "Auto help" begin
+    root_help = Argument("--help"; auto_help = true)
+    beta_help = Argument("--help"; auto_help = true)
+    parser = Parser([
+        root_help
+    ], [
+        Command("alpha", [Argument("item")]),
+        Command("beta", [beta_help], [Command("nested", [Argument("value")])]),
+        Command("gamma", [Argument("value")]; auto_help = false)
+    ])
+
+    @test parser.commands[1].auto_help
+    @test parser.commands[1].arguments[1].auto_help
+    @test parser.commands[1].arguments[1].names == root_help.names
+    @test parser.commands[2].arguments[1].names == beta_help.names
+    @test parser.commands[2].commands[1].arguments[1].names == beta_help.names
+    @test all(!argument.auto_help for argument in parser.commands[3].arguments)
+
+    wrapped = Command("wrapped", parser)
+    @test !wrapped.auto_help
+
+    root_result = parser(["--help"]; error_mode = :return)
+    @test root_result.stopped
+    root_depth = Cliff._find_auto_help_stop_level(root_result.levels, root_result.stop_argument)
+    @test root_depth == 1
+    io = IOBuffer()
+    Cliff._print_basic_help(io, parser, root_result, root_depth)
+    output = String(take!(io))
+    @test occursin("Usage: <program>", output)
+    @test occursin("Options:", output)
+    @test occursin("--help", output)
+    @test occursin("Sub-commands:", output)
+    @test occursin("alpha", output)
+
+    beta_result = parser(["beta", "--help"]; error_mode = :return)
+    @test beta_result.stopped
+    beta_depth = Cliff._find_auto_help_stop_level(beta_result.levels, beta_result.stop_argument)
+    @test beta_depth == 2
+    beta_io = IOBuffer()
+    Cliff._print_basic_help(beta_io, parser, beta_result, beta_depth)
+    beta_output = String(take!(beta_io))
+    @test occursin("Usage: <program> beta", beta_output)
+    @test occursin("Options:", beta_output)
+    @test occursin("Sub-commands:", beta_output)
+    @test occursin("nested", beta_output)
+
+    nested_result = parser(["beta", "nested", "--help"]; error_mode = :return)
+    @test nested_result.stopped
+    nested_depth = Cliff._find_auto_help_stop_level(nested_result.levels, nested_result.stop_argument)
+    @test nested_depth == 3
+    nested_io = IOBuffer()
+    Cliff._print_basic_help(nested_io, parser, nested_result, nested_depth)
+    nested_output = String(take!(nested_io))
+    @test occursin("Usage: <program> beta nested value", nested_output)
+    @test occursin("Options:", nested_output)
+
+    return_result = parser(["--help"]; error_mode = :return)
+    @test return_result.stopped
+
+    throw_result = parser(["--help"]; error_mode = :throw)
+    @test throw_result.stopped
 end
 
 @testset "Positional after first" begin

@@ -46,6 +46,7 @@ struct Argument
     choices::Vector{String}
     has_regex::Bool
     regex::Regex
+    auto_help::Bool
 end
 
 """
@@ -55,17 +56,20 @@ Describe a command or sub-command with its own `arguments` and nested
 `commands`.
 
 Construct with a single `names` argument plus positional collections for the
-argument list and nested commands.
+argument list and nested commands. Set `auto_help = false` to prevent the
+command from inheriting auto help flags from its parent.
 
 Public fields:
 
   * `names::Vector{String}` – aliases recognised for the command.
   * `arguments::Vector{Argument}` – command-scoped arguments.
-  * `commands::Vector{Command}` – nested sub-commands.
+ * `commands::Vector{Command}` – nested sub-commands.
   * `argument_lookup::Dict{String, Int}` – mapping from argument name to index
     (exposed for introspection, though generally internal).
   * `positional_indices::Vector{Int}` – order of positional arguments.
   * `command_lookup::Dict{String, Int}` – sub-command lookup table.
+  * `auto_help::Bool` – whether the command inherits auto help arguments from
+    parents.
 """
 struct Command
     names::Vector{String}
@@ -75,6 +79,7 @@ struct Command
     positional_indices::Vector{Int}
     command_lookup::Dict{String, Int}
     positional_after_first::Bool
+    auto_help::Bool
 end
 
 """
@@ -198,6 +203,80 @@ function _build_command_lookup(commands::Vector{Command})
 end
 
 const _UNBOUNDED = typemax(Int)
+
+function _auto_help_argument(arguments::Vector{Argument})
+    for argument in arguments
+        if argument.auto_help
+            return argument
+        end
+    end
+    return nothing
+end
+
+function _construct_command(names::Vector{String}, arguments::Vector{Argument}, commands::Vector{Command}, positional_after_first::Bool, auto_help::Bool)
+    name_vec = Vector{String}(names)
+    args_vec = Vector{Argument}(arguments)
+    cmds_vec = Vector{Command}(commands)
+    argument_lookup = _build_argument_lookup(args_vec)
+    positional_indices = _build_positional_indices(args_vec)
+    command_lookup = _build_command_lookup(cmds_vec)
+    return Command(name_vec, args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup, positional_after_first, auto_help)
+end
+
+function _construct_parser(arguments::Vector{Argument}, commands::Vector{Command}, positional_after_first::Bool)
+    args_vec = Vector{Argument}(arguments)
+    cmds_vec = Vector{Command}(commands)
+    argument_lookup = _build_argument_lookup(args_vec)
+    positional_indices = _build_positional_indices(args_vec)
+    command_lookup = _build_command_lookup(cmds_vec)
+    return Parser(args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup, positional_after_first)
+end
+
+function _propagate_auto_help_to_commands(commands::Vector{Command}, inherited::Union{Nothing, Argument})
+    if isempty(commands)
+        return commands, false
+    end
+    updated = Vector{Command}(undef, length(commands))
+    changed = false
+    for (idx, command) in enumerate(commands)
+        propagated = _propagate_auto_help(command, inherited)
+        updated[idx] = propagated
+        if propagated !== command
+            changed = true
+        end
+    end
+    return changed ? updated : commands, changed
+end
+
+function _propagate_auto_help(command::Command, inherited::Union{Nothing, Argument})
+    args_vec = command.arguments
+    own_auto = _auto_help_argument(args_vec)
+    inserted = false
+    if own_auto === nothing && inherited !== nothing && command.auto_help
+        args_vec = Argument[inherited; args_vec...]
+        inserted = true
+        own_auto = inherited
+    end
+    child_inherited = own_auto
+    commands_vec, children_changed = _propagate_auto_help_to_commands(command.commands, child_inherited)
+    if inserted || children_changed
+        final_args = inserted ? args_vec : command.arguments
+        final_commands = children_changed ? commands_vec : command.commands
+        return _construct_command(command.names, final_args, final_commands, command.positional_after_first, command.auto_help)
+    else
+        return command
+    end
+end
+
+function _propagate_auto_help(parser::Parser)
+    auto_help_argument = _auto_help_argument(parser.arguments)
+    commands_vec, changed = _propagate_auto_help_to_commands(parser.commands, auto_help_argument)
+    if changed
+        return _construct_parser(parser.arguments, commands_vec, parser.positional_after_first)
+    else
+        return parser
+    end
+end
 
 """
     _normalize_repeat_value(value, name)
@@ -359,7 +438,8 @@ end
 """
     Argument(names...; required=nothing, default=nothing, flag=false,
              stop=false, repeat=nothing, min_repeat=nothing,
-             max_repeat=nothing, choices=nothing, regex=nothing)
+             max_repeat=nothing, choices=nothing, regex=nothing,
+             auto_help=false)
 
 Create an `Argument` for positional values, long options, or flags. Supply one
 or more names as strings (or vectors of strings); short options must be exactly
@@ -375,6 +455,7 @@ two characters long (e.g. `"-h"`). Keyword arguments:
   * `repeat`, `min_repeat`, `max_repeat` – control occurrence counts.
   * `choices` – restrict accepted values to a specific list.
   * `regex` – require values to match a `Regex`.
+  * `auto_help` – mark the argument as an automatic help flag.
 
 Flags cannot customise defaults or `flag_value`; they always behave like
 booleans with string representations "0"/"1". When `default` is a vector each
@@ -382,12 +463,16 @@ element is stored in the order provided, making `default = [1, 2, 3]` suitable
 for repeatable arguments. Internally this constructor validates combinations
 and prepares lookup tables consumed by `Parser`.
 """
-function Argument(names; required::Union{Bool, Nothing} = nothing, default = nothing, flag::Bool = false, flag_value = nothing, stop::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing, choices = nothing, regex = nothing)
+function Argument(names; required::Union{Bool, Nothing} = nothing, default = nothing, flag::Bool = false, flag_value = nothing, stop::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing, choices = nothing, regex = nothing, auto_help::Bool = false)
     collected = _collect_names(names)
     positional = any(!startswith(name, "-") for name in collected)
     option = any(startswith(name, "-") for name in collected)
     if positional && option
         throw(ArgumentError("An argument cannot mix positional and option names"))
+    end
+    if auto_help
+        flag = true
+        stop = true
     end
     if flag && positional
         throw(ArgumentError("Flags must use option-style names"))
@@ -468,7 +553,7 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
             end
         end
     end
-    return Argument(collected, min_occurs > 0, flag, stop, has_default, default_values, positional, min_occurs, max_occurs, computed_flag_value, choice_values, has_regex, regex_obj)
+    return Argument(collected, min_occurs > 0, flag, stop, has_default, default_values, positional, min_occurs, max_occurs, computed_flag_value, choice_values, has_regex, regex_obj, auto_help)
 end
 
 """
@@ -482,22 +567,18 @@ arguments for the command-local `arguments` and nested `commands`. Commands can
 be nested directly or constructed from an existing `Parser` using
 `Command(name, parser)`.
 """
-function Command(names, arguments::Vector{Argument}, commands::Vector{Command}; positional_after_first::Bool = false)
+function Command(names, arguments::Vector{Argument}, commands::Vector{Command}; positional_after_first::Bool = false, auto_help::Bool = true)
     collected = _collect_names(names)
-    args_vec = Vector{Argument}(arguments)
-    cmds_vec = Vector{Command}(commands)
-    argument_lookup = _build_argument_lookup(args_vec)
-    positional_indices = _build_positional_indices(args_vec)
-    command_lookup = _build_command_lookup(cmds_vec)
-    return Command(collected, args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup, positional_after_first)
+    base = _construct_command(collected, arguments, commands, positional_after_first, auto_help)
+    return _propagate_auto_help(base, nothing)
 end
 
-Command(names, arguments::Vector{Argument}; positional_after_first::Bool = false) =
-    Command(names, arguments, Command[]; positional_after_first = positional_after_first)
-Command(names, commands::Vector{Command}; positional_after_first::Bool = false) =
-    Command(names, Argument[], commands; positional_after_first = positional_after_first)
-Command(names; positional_after_first::Bool = false) =
-    Command(names, Argument[]; positional_after_first = positional_after_first)
+Command(names, arguments::Vector{Argument}; positional_after_first::Bool = false, auto_help::Bool = true) =
+    Command(names, arguments, Command[]; positional_after_first = positional_after_first, auto_help = auto_help)
+Command(names, commands::Vector{Command}; positional_after_first::Bool = false, auto_help::Bool = true) =
+    Command(names, Argument[], commands; positional_after_first = positional_after_first, auto_help = auto_help)
+Command(names; positional_after_first::Bool = false, auto_help::Bool = true) =
+    Command(names, Argument[]; positional_after_first = positional_after_first, auto_help = auto_help)
 
 """
     Command(name::AbstractString, nested::Parser)
@@ -506,7 +587,7 @@ Wrap an existing parser so it can be mounted as a sub-command. The nested
 parser's arguments and commands are copied into the resulting `Command`.
 """
 function Command(name::AbstractString, nested::Parser; positional_after_first::Bool = false)
-    return Command(name, nested.arguments, nested.commands; positional_after_first = positional_after_first)
+    return Command(name, nested.arguments, nested.commands; positional_after_first = positional_after_first, auto_help = false)
 end
 
 """
@@ -520,12 +601,8 @@ Invoking the parser with `parser(argv)` (or `parse(parser, argv)`) returns a
 `Parsed` value that exposes indexing helpers and error diagnostics.
 """
 function Parser(arguments::Vector{Argument}, commands::Vector{Command}; positional_after_first::Bool = false)
-    args_vec = Vector{Argument}(arguments)
-    cmds_vec = Vector{Command}(commands)
-    argument_lookup = _build_argument_lookup(args_vec)
-    positional_indices = _build_positional_indices(args_vec)
-    command_lookup = _build_command_lookup(cmds_vec)
-    return Parser(args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup, positional_after_first)
+    base = _construct_parser(arguments, commands, positional_after_first)
+    return _propagate_auto_help(base)
 end
 
 Parser(arguments::Vector{Argument}; positional_after_first::Bool = false) =

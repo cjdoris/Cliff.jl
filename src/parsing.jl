@@ -540,6 +540,79 @@ function _execute_parse(parser::Parser, argv::Vector{String})
     return Parsed(command_copy, levels, true, !stopped, nothing, stopped, stop_name)
 end
 
+function _find_auto_help_stop_level(levels::Vector{LevelResult}, stop_argument::Union{Nothing, String})
+    if stop_argument === nothing
+        return nothing
+    end
+    for (level_idx, level) in enumerate(levels)
+        for (arg_idx, argument) in enumerate(level.arguments)
+            if argument.auto_help && (stop_argument in argument.names) && level.counts[arg_idx] > 0
+                return level_idx
+            end
+        end
+    end
+    return nothing
+end
+
+function _resolve_help_target(parser::Parser, command_path::Vector{String}, depth::Int)
+    usage = String["<program>"]
+    if depth <= 1
+        return parser, usage
+    end
+    current = parser
+    limit = min(depth - 1, length(command_path))
+    for idx in 1:limit
+        name = command_path[idx]
+        cmd_idx = get(current.command_lookup, name, 0)
+        if cmd_idx == 0
+            return current, usage
+        end
+        command = current.commands[cmd_idx]
+        push!(usage, first(command.names))
+        if idx == depth - 1
+            return command, usage
+        end
+        current = command
+    end
+    return current, usage
+end
+
+function _print_basic_help(io::IO, parser::Parser, parsed::Parsed, depth::Int)
+    target, usage_path = _resolve_help_target(parser, parsed.command, depth)
+    usage_line = join(usage_path, " ")
+    positional = String[]
+    for argument in target.arguments
+        if argument.positional
+            push!(positional, first(argument.names))
+        end
+    end
+    if !isempty(positional)
+        usage_line = string(usage_line, " ", join(positional, " "))
+    end
+    println(io, "Usage: ", usage_line)
+    optionals = String[]
+    for argument in target.arguments
+        if !argument.positional
+            push!(optionals, join(argument.names, ", "))
+        end
+    end
+    if !isempty(optionals)
+        println(io)
+        println(io, "Options:")
+        for entry in optionals
+            println(io, "  ", entry)
+        end
+    end
+    if !isempty(target.commands)
+        println(io)
+        println(io, "Sub-commands:")
+        for command in target.commands
+            println(io, "  ", first(command.names))
+        end
+    end
+    return nothing
+end
+
 """
     parse(parser, argv; error_mode=:exit, io=stderr, exit_code=1)
 
@@ -555,7 +628,15 @@ function parse(parser::Parser, argv::Vector{String}; error_mode::Symbol = :exit,
         throw(ArgumentError("Unsupported error_mode: $(error_mode)"))
     end
     try
-        return _execute_parse(parser, argv)
+        result = _execute_parse(parser, argv)
+        if result.stopped
+            depth = _find_auto_help_stop_level(result.levels, result.stop_argument)
+            if depth !== nothing && error_mode === :exit
+                _print_basic_help(io, parser, result, depth)
+                exit(0)
+            end
+        end
+        return result
     catch err
         if err isa ParseError
             parsed = Parsed(err.command, err.levels, false, false, err, err.stopped, err.stop_argument)
