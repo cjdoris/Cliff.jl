@@ -74,6 +74,7 @@ struct Command
     argument_lookup::Dict{String, Int}
     positional_indices::Vector{Int}
     command_lookup::Dict{String, Int}
+    positional_after_first::Bool
 end
 
 """
@@ -95,6 +96,7 @@ struct Parser
     argument_lookup::Dict{String, Int}
     positional_indices::Vector{Int}
     command_lookup::Dict{String, Int}
+    positional_after_first::Bool
 end
 
 """
@@ -480,19 +482,22 @@ arguments for the command-local `arguments` and nested `commands`. Commands can
 be nested directly or constructed from an existing `Parser` using
 `Command(name, parser)`.
 """
-function Command(names, arguments::Vector{Argument}, commands::Vector{Command})
+function Command(names, arguments::Vector{Argument}, commands::Vector{Command}; positional_after_first::Bool = false)
     collected = _collect_names(names)
     args_vec = Vector{Argument}(arguments)
     cmds_vec = Vector{Command}(commands)
     argument_lookup = _build_argument_lookup(args_vec)
     positional_indices = _build_positional_indices(args_vec)
     command_lookup = _build_command_lookup(cmds_vec)
-    return Command(collected, args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup)
+    return Command(collected, args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup, positional_after_first)
 end
 
-Command(names, arguments::Vector{Argument}) = Command(names, arguments, Command[])
-Command(names, commands::Vector{Command}) = Command(names, Argument[], commands)
-Command(names) = Command(names, Argument[], Command[])
+Command(names, arguments::Vector{Argument}; positional_after_first::Bool = false) =
+    Command(names, arguments, Command[]; positional_after_first = positional_after_first)
+Command(names, commands::Vector{Command}; positional_after_first::Bool = false) =
+    Command(names, Argument[], commands; positional_after_first = positional_after_first)
+Command(names; positional_after_first::Bool = false) =
+    Command(names, Argument[]; positional_after_first = positional_after_first)
 
 """
     Command(name::AbstractString, nested::Parser)
@@ -500,8 +505,8 @@ Command(names) = Command(names, Argument[], Command[])
 Wrap an existing parser so it can be mounted as a sub-command. The nested
 parser's arguments and commands are copied into the resulting `Command`.
 """
-function Command(name::AbstractString, nested::Parser)
-    return Command(name, nested.arguments, nested.commands)
+function Command(name::AbstractString, nested::Parser; positional_after_first::Bool = false)
+    return Command(name, nested.arguments, nested.commands; positional_after_first = positional_after_first)
 end
 
 """
@@ -514,15 +519,18 @@ Construct a top-level parser. Arguments and commands apply to the root level.
 Invoking the parser with `parser(argv)` (or `parse(parser, argv)`) returns a
 `Parsed` value that exposes indexing helpers and error diagnostics.
 """
-function Parser(arguments::Vector{Argument}, commands::Vector{Command})
+function Parser(arguments::Vector{Argument}, commands::Vector{Command}; positional_after_first::Bool = false)
     args_vec = Vector{Argument}(arguments)
     cmds_vec = Vector{Command}(commands)
     argument_lookup = _build_argument_lookup(args_vec)
     positional_indices = _build_positional_indices(args_vec)
     command_lookup = _build_command_lookup(cmds_vec)
-    return Parser(args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup)
+    return Parser(args_vec, cmds_vec, argument_lookup, positional_indices, command_lookup, positional_after_first)
 end
 
-Parser(arguments::Vector{Argument}) = Parser(arguments, Command[])
-Parser(commands::Vector{Command}) = Parser(Argument[], commands)
-Parser() = Parser(Argument[], Command[])
+Parser(arguments::Vector{Argument}; positional_after_first::Bool = false) =
+    Parser(arguments, Command[]; positional_after_first = positional_after_first)
+Parser(commands::Vector{Command}; positional_after_first::Bool = false) =
+    Parser(Argument[], commands; positional_after_first = positional_after_first)
+Parser(; positional_after_first::Bool = false) =
+    Parser(Argument[]; positional_after_first = positional_after_first)

@@ -198,6 +198,26 @@ end
     @test parsed_optional["maybe", Vector{String}] == String[]
 end
 
+@testset "Positional after first" begin
+    shell_parser = Parser([Argument("cmd"; repeat = true)]; positional_after_first = true)
+    shell_args = shell_parser(["python", "--version"]; error_mode = :throw)
+    @test shell_args["cmd", Vector{String}] == ["python", "--version"]
+
+    run_command = Parser([
+        Command("run", [Argument("cmd"; repeat = true)]; positional_after_first = true)
+    ])
+
+    args_plain = run_command(["run", "python", "--version"]; error_mode = :throw)
+    @test args_plain.command == ["run"]
+    @test args_plain["cmd", Vector{String}] == ["python", "--version"]
+
+    args_with_double_dash = run_command(["run", "python", "--", "--version"]; error_mode = :throw)
+    @test args_with_double_dash["cmd", Vector{String}] == ["python", "--version"]
+
+    args_with_short = run_command(["run", "python", "-c", "print(1)"]; error_mode = :throw)
+    @test args_with_short["cmd", Vector{String}] == ["python", "-c", "print(1)"]
+end
+
 @testset "Option handling" begin
     parser = Parser([
         Argument(["--count", "-c"]; default = "0"),

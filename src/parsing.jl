@@ -15,6 +15,8 @@ mutable struct LevelResult
     positional_indices::Vector{Int}
     values::Vector{Vector{String}}
     counts::Vector{Int}
+    positional_after_first::Bool
+    positional_consumed::Bool
 end
 
 """
@@ -99,15 +101,17 @@ end
 # Internal helpers
 
 """
-    _init_level(arguments, lookup, positional_indices)
+    _init_level(arguments, lookup, positional_indices, positional_after_first)
 
 Create a fresh `LevelResult` for a parser level. Called when entering the root
-parser and whenever a sub-command is activated.
+parser and whenever a sub-command is activated. The `positional_after_first`
+flag records whether the level should treat subsequent tokens as positional
+after consuming the first positional argument.
 """
-function _init_level(arguments::Vector{Argument}, lookup::Dict{String, Int}, positional_indices::Vector{Int})
+function _init_level(arguments::Vector{Argument}, lookup::Dict{String, Int}, positional_indices::Vector{Int}, positional_after_first::Bool)
     values = [String[] for _ in arguments]
     counts = fill(0, length(arguments))
-    return LevelResult(arguments, lookup, positional_indices, values, counts)
+    return LevelResult(arguments, lookup, positional_indices, values, counts, positional_after_first, false)
 end
 
 """
@@ -436,7 +440,7 @@ error handling (throwing `ParseError`s) lives here.
 """
 function _execute_parse(parser::Parser, argv::Vector{String})
     levels = LevelResult[]
-    push!(levels, _init_level(parser.arguments, parser.argument_lookup, parser.positional_indices))
+    push!(levels, _init_level(parser.arguments, parser.argument_lookup, parser.positional_indices, parser.positional_after_first))
     positional_cursors = Int[1]
     command_path = String[]
     current = parser
@@ -450,19 +454,20 @@ function _execute_parse(parser::Parser, argv::Vector{String})
     stop_argument = nothing
     while i <= length(argv)
         token = argv[i]
+        level = levels[end]
+        positional_lock = level.positional_after_first && level.positional_consumed
         if allow_options && token == "--"
             allow_options = false
             i += 1
             continue
         end
-        level = levels[end]
-        cmd_idx = get(current.command_lookup, token, 0)
+        cmd_idx = positional_lock ? 0 : get(current.command_lookup, token, 0)
         if cmd_idx != 0 && !_has_outstanding_required(level)
             command_satisfied[end] = true
             next_command = current.commands[cmd_idx]
             current = next_command
             push!(command_path, token)
-            push!(levels, _init_level(next_command.arguments, next_command.argument_lookup, next_command.positional_indices))
+            push!(levels, _init_level(next_command.arguments, next_command.argument_lookup, next_command.positional_indices, next_command.positional_after_first))
             push!(positional_cursors, 1)
             allow_options = true
             push!(command_requirements, !isempty(next_command.commands))
@@ -472,7 +477,8 @@ function _execute_parse(parser::Parser, argv::Vector{String})
             i += 1
             continue
         end
-        if allow_options && startswith(token, "--") && token != "--"
+        positional_lock = level.positional_after_first && level.positional_consumed
+        if allow_options && !positional_lock && startswith(token, "--") && token != "--"
             i, stop_name = _consume_option!(levels, argv, i, token, command_path)
             if stop_name !== nothing
                 stopped = true
@@ -482,7 +488,7 @@ function _execute_parse(parser::Parser, argv::Vector{String})
                 break
             end
             continue
-        elseif allow_options && startswith(token, "-") && token != "-"
+        elseif allow_options && !positional_lock && startswith(token, "-") && token != "-"
             i, stop_name = _consume_short_option!(levels, argv, i, token, command_path)
             if stop_name !== nothing
                 stopped = true
@@ -499,6 +505,9 @@ function _execute_parse(parser::Parser, argv::Vector{String})
         end
         argument = level.arguments[positional_index]
         triggered = _set_value!(level, positional_index, token, command_path, levels)
+        if level.positional_after_first && !level.positional_consumed
+            level.positional_consumed = true
+        end
         if argument.max_occurs != _UNBOUNDED && level.counts[positional_index] >= argument.max_occurs
             positional_cursors[end] = cursor_position + 1
         else
