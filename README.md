@@ -1,6 +1,11 @@
 # 🏔️ Cliff.jl
 
-Cliff, the Command Line InterFace Factory, is a lightweight, type-stable argument parsing library for Julia built to help you assemble polished CLIs without fuss.
+Cliff, the Command Line InterFace Factory, is a lightweight, type-stable argument parsing library for Julia built to help you assemble polished CLIs without fuss. It combines familiar ergonomics with a few focused conveniences:
+
+- Standard command-line affordances such as positional arguments, long options (`--arg=foo`), short options (`-n 5`), flags (`--version`), and repeated arguments (`-vvv`).
+- Arbitrarily nested subcommands so complex workflows like `git remote add ...` feel natural.
+- Type-stable retrieval helpers that convert values on access, keeping downstream code predictable.
+- Early-stopping hooks and auto-help support so `--help` and similar flags can exit gracefully.
 
 ```julia
 using Cliff
@@ -26,30 +31,6 @@ greet(["Julia", "--uppercase", "--excitement", "3"])
 ```
 
 See `examples/example.jl` for a more detailed walk-through of nested commands, typed retrieval, validation, and error handling.
-
-## Features
-
-### Argument definition
-
-- Cliff automatically marks arguments optional whenever a sensible default exists: providing `default`, using `flag = true`, marking `stop = true`, or specifying `repeat = true` all drop the minimum occurrence to zero.
-- Apply `choices` to constrain input to an explicit allowlist and `regex` to enforce pattern matching.
-- Repeatable positional arguments, options, and flags with configurable occurrence ranges.
-- Arguments that can terminate parsing early via `stop = true` (ideal for `--help`).
-- Short options must be exactly two characters long (for example `-h`).
-- Defaults can be numeric or structured Julia values—Cliff stores them using `repr` so `default = 5` or `default = [1, 2, 3]` behave as expected.
-- Inline values for short options treat everything after the option as the value, so `-x=3` parses as option `-x` with the value `"=3"`.
-
-### Command orchestration
-
-- Nested sub-commands with disambiguation of arguments by command depth.
-- Reusable command definitions via `Command("name", parser)`.
-- Explicit handling of `--` to stop option parsing while still allowing sub-command detection.
-
-### Retrieval & diagnostics
-
-- Retrieval helpers such as `args["name"]`, `args["name", depth]`, `args["name", Type]`, and `args["name", Vector{T}]` (or the shorthand `args["name", Type, +]`).
-- Configurable error handling that can exit, throw a `ParseError`, or return a partial `Parsed` result.
-- No implicit `--help` handling and no automatic usage string generation.
 
 ## User Guide
 
