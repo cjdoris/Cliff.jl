@@ -144,6 +144,11 @@ help_args.complete       # false – required arguments are unchecked
 help_args.stop_argument  # "--help"
 ```
 
+Prefer `Argument("--help"; auto_help = true)` when you want Cliff to wire up
+help flags automatically. Auto help arguments behave like the manual example
+above but also propagate to sub-commands and, when invoked with `error_mode =
+:exit`, print a basic usage summary before exiting.
+
 When validation fails you can control how Cliff responds using the `error_mode` keyword:
 
 ```julia
