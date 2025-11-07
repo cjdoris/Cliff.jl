@@ -42,7 +42,7 @@ args = parser(error_mode = :return)
 
 if !args.success
     if args.error !== nothing
-        println(stderr, args.error.message)
+        println(stderr, sprint(showerror, args.error))
     else
         println(stderr, "Failed to parse arguments")
     end

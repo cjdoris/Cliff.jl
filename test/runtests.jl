@@ -155,7 +155,7 @@ end
     end
     @test err_choice isa ParseError
     @test err_choice.kind == :invalid_value
-    @test occursin("fast", err_choice.message)
+    @test occursin("fast", sprint(showerror, err_choice))
 
     err_regex = try
         parser(["fast", "--name", "Alpha"]; error_mode = :throw)
@@ -164,7 +164,7 @@ end
     end
     @test err_regex isa ParseError
     @test err_regex.kind == :invalid_value
-    @test occursin("pattern", err_regex.message)
+    @test occursin("pattern", sprint(showerror, err_regex))
 
     err_tag = try
         parser(["fast", "--tag", "green"]; error_mode = :throw)
@@ -173,7 +173,7 @@ end
     end
     @test err_tag isa ParseError
     @test err_tag.kind == :invalid_value
-    @test occursin("red", err_tag.message)
+    @test occursin("red", sprint(showerror, err_tag))
 end
 
 @testset "Command disambiguation" begin
@@ -607,7 +607,113 @@ end
     @test stop_args.stopped
     @test stop_args.stop_argument == "item"
 
-    @test sprint(showerror, ParseError(:custom, "message", String[], Cliff.LevelResult[], nothing, nothing, false, nothing)) == "message"
+end
+
+@testset "Error message rendering" begin
+    function error_message(parser::Parser, argv::Vector{String})
+        try
+            parser(argv; error_mode = :throw)
+            @test false
+            return ""
+        catch err
+            @test err isa ParseError
+            return sprint(showerror, err)
+        end
+    end
+
+    default_parser = Parser([Argument("--flag"; flag = true)]; help_program = "julia script.jl")
+    @test error_message(default_parser, ["--unknown"]) ==
+          "In 'julia script.jl --unknown', invalid argument '--unknown'."
+
+    required_parser = Parser([Argument("--input"; required = true)]; help_program = "program")
+    @test error_message(required_parser, String[]) ==
+          "In 'program', argument '--input' required 1 time but was provided 0 times."
+
+    triple_parser = Parser([Argument("--triple"; repeat = 3)]; help_program = "program")
+    @test error_message(triple_parser, String[]) ==
+          "In 'program', argument '--triple' required 3 times but was provided 0 times."
+    @test error_message(triple_parser, [
+        "--triple", "one",
+        "--triple", "two",
+        "--triple", "three",
+        "--triple", "four",
+    ]) == "In 'program --triple', argument '--triple' required 3 times but was provided 4 times."
+
+    range_parser = Parser([Argument("--range"; repeat = 2:4)]; help_program = "program")
+    @test error_message(range_parser, ["--range", "one"]) ==
+          "In 'program --range one', argument '--range' required 2-4 times but was provided 1 time."
+    @test error_message(range_parser, [
+        "--range", "one",
+        "--range", "two",
+        "--range", "three",
+        "--range", "four",
+        "--range", "five",
+    ]) == "In 'program --range', argument '--range' required 2-4 times but was provided 5 times."
+
+    atleast_parser = Parser([Argument("--multi"; repeat = (2, nothing))]; help_program = "program")
+    @test error_message(atleast_parser, ["--multi", "one"]) ==
+          "In 'program --multi one', argument '--multi' required at least 2 times but was provided 1 time."
+
+    choices_parser = Parser([Argument("--mode"; choices = ["fast", "slow"])]; help_program = "program")
+    @test error_message(choices_parser, ["--mode", "medium"]) ==
+          "In 'program --mode medium', invalid value 'medium' for '--mode'; expected one of 'fast', 'slow'."
+
+    regex_parser = Parser([Argument("--name"; regex = r"^[a-z]+$")]; help_program = "program")
+    regex_expected = "In 'program --name 123', invalid value '123' for '--name'; expected to match pattern r\"^[a-z]+\$\"."
+    @test error_message(regex_parser, ["--name", "123"]) == regex_expected
+
+    missing_value = Parser([Argument("--value")]; help_program = "program")
+    @test error_message(missing_value, ["--value"]) ==
+          "In 'program --value', missing value for '--value'."
+
+    short_flag_value = Parser([Argument(["--quiet", "-q"]; flag = true)]; help_program = "program")
+    @test error_message(short_flag_value, ["-q=1"]) ==
+          "In 'program -q=1', argument '-q' does not take a value."
+
+    unexpected_positional = Parser([Argument("--flag"; flag = true)]; help_program = "program")
+    @test error_message(unexpected_positional, ["value"]) ==
+          "In 'program value', unexpected positional argument 'value'."
+
+    command_parser = Parser(Argument[], Command[Command("status")]; help_program = "program")
+    @test error_message(command_parser, String[]) ==
+          "In 'program', expected a command."
+    @test error_message(command_parser, ["bogus"]) ==
+          "In 'program bogus', invalid command 'bogus'."
+
+    remote_parser = Parser(Argument[], Command[Command("remote", Command[Command("add")])]; help_program = "git")
+    @test error_message(remote_parser, ["remote"]) ==
+          "In 'git remote remote', expected a subcommand for 'remote'."
+
+    git_parser = Parser(
+        [Argument("--help"; flag = true)],
+        [
+            Command("status"),
+            Command("remote", Command[Command("add"), Command("remove")]),
+            Command("commit", [Argument(["--message", "-m"])])
+        ];
+        help_program = "git",
+    )
+
+    @test error_message(git_parser, ["status", "--foo"]) == "In 'git status --foo', invalid argument '--foo'."
+    @test error_message(git_parser, ["remote", "odd"]) == "In 'git remote odd', invalid subcommand 'odd'."
+    @test error_message(git_parser, ["commit", "-m"]) == "In 'git commit -m', missing value for '-m'."
+    @test error_message(git_parser, ["--help=foo"]) == "In 'git --help=foo', argument '--help' does not take a value."
+
+    commit_repeat = Parser(
+        Command[Command("commit", [Argument(["--message", "-m"]; flag = true, repeat = 0:2)])];
+        help_program = "git",
+    )
+    @test error_message(commit_repeat, ["commit", "-m", "-m", "-m"]) ==
+          "In 'git commit -m', argument '-m' expected at most 2 times but was provided 3 times."
+
+    script_parser = Parser([
+        Argument(["--exit", "-x"]; flag = true, repeat = 0:2),
+        Argument(["--alpha", "-a"]; flag = true),
+        Argument(["--beta", "-b"])
+    ]; help_program = "script.jl")
+    @test error_message(script_parser, ["-xxx"]) ==
+          "In 'script.jl -xxx', argument '-x' expected at most 2 times but was provided 3 times."
+    @test error_message(script_parser, ["-ab"]) == "In 'script.jl -ab', invalid argument '-b'."
 end
 
 @testset "Double dash behaviour" begin
@@ -645,7 +751,9 @@ end
     @test result.command == String[]
     @test result.stop_argument === nothing
     @test result.error.command == String[]
-    @test occursin("Missing required argument", result.error.message)
+    error_string = lowercase(sprint(showerror, result.error))
+    @test occursin("required 1 time", error_string)
+    @test occursin("provided 0 times", error_string)
 
     success = parser(["value"]; error_mode = :return)
     @test success.success
@@ -700,5 +808,7 @@ end
     ok_fail, out_fail, err_fail = run_example(String[])
     @test !ok_fail
     @test isempty(out_fail)
-    @test occursin("Missing required argument", err_fail)
+    err_fail_lower = lowercase(err_fail)
+    @test occursin("required 1 time", err_fail_lower)
+    @test occursin("provided 0 times", err_fail_lower)
 end

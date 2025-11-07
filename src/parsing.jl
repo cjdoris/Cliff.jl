@@ -28,45 +28,257 @@ Fields exposed for diagnostics include:
 
   * `kind::Symbol` – error classification (:missing_required, :invalid_value,
     etc.).
-  * `message::String` – human-readable explanation.
   * `command::Vector{String}` – command path active when the error occurred.
   * `levels::Vector{LevelResult}` – parser state snapshot, useful for tooling.
   * `argument::Union{Nothing, String}` – offending argument name, if any.
   * `token::Union{Nothing, String}` – input token that triggered the error.
   * `stopped::Bool` / `stop_argument::Union{Nothing, String}` – indicate that a
     stop argument halted parsing before completion.
+  * `argv_range::Tuple{Int, Int}` – index range (inclusive) in the argument
+    list that pinpoints the error location, or `(0, -1)` when unavailable.
+  * `token_range::Tuple{Int, Int}` – character range within the triggering
+    token for bundled short options, or `(0, -1)` when not applicable.
+  * `actual_occurs::Union{Nothing, Int}` – observed occurrence count when
+    validating repetition requirements, if known.
+  * `program::String` / `argv::Vector{String}` – captured invocation data used
+    to render rich error messages.
 """
 struct ParseError <: Exception
     kind::Symbol
-    message::String
     command::Vector{String}
     levels::Vector{LevelResult}
     argument::Union{Nothing, String}
     token::Union{Nothing, String}
     stopped::Bool
     stop_argument::Union{Nothing, String}
+    argv_range::Tuple{Int, Int}
+    token_range::Tuple{Int, Int}
+    actual_occurs::Union{Nothing, Int}
+    program::String
+    argv::Vector{String}
 end
 
-"""
-    Base.showerror(io::IO, err::ParseError)
+struct _ParseTrace
+    program::String
+    argv::Vector{String}
+end
 
-Display a `ParseError` by printing its message.
+const _EMPTY_RANGE = (0, -1)
 
-Allows pretty printing via the standard Julia error-reporting machinery.
-"""
+@inline function _normalize_range(range::Union{Nothing, Tuple{Int, Int}, UnitRange{Int}})
+    if range === nothing
+        return _EMPTY_RANGE
+    elseif range isa UnitRange{Int}
+        return (first(range), last(range))
+    else
+        return range
+    end
+end
+
+@inline _normalize_range(range::Tuple{Int, Int}) = range
+
+@inline function _range_from_index(index::Int)
+    return index <= 0 ? _EMPTY_RANGE : (index, index)
+end
+
+@inline function _quoted(text::AbstractString)
+    return "'" * text * "'"
+end
+
+function _join_quoted(values::Vector{String})
+    return join([_quoted(value) for value in values], ", ")
+end
+
+function _argument_from_error(err::ParseError)
+    name = err.argument
+    if name === nothing
+        return nothing
+    end
+    for level in err.levels
+        idx = get(level.argument_lookup, name, 0)
+        if idx != 0
+            return level.arguments[idx]
+        end
+    end
+    return nothing
+end
+
+@inline function _times_phrase(count::Int)
+    return count == 1 ? "1 time" : string(count, " times")
+end
+
+function _missing_requirement_message(
+        quoted_alias::Union{Nothing, String},
+        argument::Union{Nothing, Argument},
+        actual_occurs::Union{Nothing, Int},
+    )
+    if argument === nothing
+        if quoted_alias === nothing
+            return "missing required argument."
+        else
+            return "missing required argument $(quoted_alias)."
+        end
+    end
+    subject = quoted_alias === nothing ? "argument" : "argument $(quoted_alias)"
+    min_occurs = argument.min_occurs
+    max_occurs = argument.max_occurs
+    expected = if max_occurs == _UNBOUNDED
+        "at least $(_times_phrase(min_occurs))"
+    elseif min_occurs == max_occurs
+        _times_phrase(min_occurs)
+    else
+        string(min_occurs, "-", max_occurs, " times")
+    end
+    if actual_occurs === nothing
+        return "$(subject) required $(expected)."
+    else
+        return "$(subject) required $(expected) but was provided $(_times_phrase(actual_occurs))."
+    end
+end
+
+function _excess_occurrence_message(
+        quoted_alias::Union{Nothing, String},
+        argument::Union{Nothing, Argument},
+        actual_occurs::Union{Nothing, Int},
+    )
+    if argument === nothing
+        if quoted_alias === nothing
+            return actual_occurs === nothing ? "repeated argument." : "repeated argument provided $(_times_phrase(actual_occurs))."
+        else
+            return actual_occurs === nothing ? "repeated argument $(quoted_alias)." : "repeated argument $(quoted_alias) provided $(_times_phrase(actual_occurs))."
+        end
+    end
+    subject = quoted_alias === nothing ? "argument" : "argument $(quoted_alias)"
+    max_occurs = argument.max_occurs
+    expected = if argument.min_occurs <= 1
+        "at most $(_times_phrase(max_occurs))"
+    elseif argument.min_occurs == max_occurs
+        _times_phrase(max_occurs)
+    else
+        string(argument.min_occurs, "-", max_occurs, " times")
+    end
+    prefix = argument.min_occurs <= 1 ? "expected" : "required"
+    if actual_occurs === nothing
+        return "$(subject) $(prefix) $(expected)."
+    else
+        return "$(subject) $(prefix) $(expected) but was provided $(_times_phrase(actual_occurs))."
+    end
+end
+
+function _invocation_string(err::ParseError)
+    parts = String[]
+    if !isempty(err.program)
+        push!(parts, err.program)
+    end
+    append!(parts, err.command)
+    if err.argv_range != _EMPTY_RANGE
+        idx = clamp(err.argv_range[1], 1, length(err.argv))
+        if 1 <= idx <= length(err.argv)
+            push!(parts, err.argv[idx])
+        end
+    elseif !isempty(err.argv)
+        append!(parts, err.argv)
+    end
+    if err.kind === :invalid_value && err.token !== nothing
+        if isempty(parts) || parts[end] != err.token
+            push!(parts, err.token)
+        end
+    end
+    return isempty(parts) ? "" : join(parts, " ")
+end
+
+function _describe_parse_error(err::ParseError)
+    argument = _argument_from_error(err)
+    alias = err.argument
+    token = err.token
+    quoted_alias = alias === nothing ? nothing : _quoted(alias)
+    quoted_token = token === nothing ? nothing : _quoted(token)
+    kind = err.kind
+    if kind === :missing_required
+        return _missing_requirement_message(quoted_alias, argument, err.actual_occurs)
+    elseif kind === :invalid_value
+        value_part = quoted_token === nothing ? "invalid value" : "invalid value $(quoted_token)"
+        if quoted_alias === nothing
+            return string(value_part, ".")
+        elseif argument !== nothing && !isempty(argument.choices)
+            choices = _join_quoted(argument.choices)
+            return "$(value_part) for $(quoted_alias); expected one of $(choices)."
+        elseif argument !== nothing && argument.has_regex
+            return "$(value_part) for $(quoted_alias); expected to match pattern $(argument.regex)."
+        else
+            return "$(value_part) for $(quoted_alias)."
+        end
+    elseif kind === :too_many_occurrences
+        return _excess_occurrence_message(quoted_alias, argument, err.actual_occurs)
+    elseif kind === :unknown_option || kind === :unsupported_short_option
+        subject = quoted_token === nothing ? (quoted_alias === nothing ? "argument" : quoted_alias) : quoted_token
+        return "invalid argument $(subject)."
+    elseif kind === :invalid_option_usage
+        return quoted_alias === nothing ? "invalid option usage." : "positional argument $(quoted_alias) cannot be used as an option."
+    elseif kind === :flag_value
+        name = quoted_alias !== nothing ? quoted_alias : (quoted_token !== nothing ? quoted_token : "argument")
+        return "argument $(name) does not take a value."
+    elseif kind === :missing_option_value
+        name = quoted_alias !== nothing ? quoted_alias : (quoted_token !== nothing ? quoted_token : "option")
+        return "missing value for $(name)."
+    elseif kind === :unexpected_positional
+        return quoted_token === nothing ? "unexpected positional argument." : "unexpected positional argument $(quoted_token)."
+    elseif kind === :missing_command
+        return "expected a command."
+    elseif kind === :missing_subcommand
+        return quoted_token === nothing ? "expected a subcommand." : "expected a subcommand for $(quoted_token)."
+    elseif kind === :unknown_command
+        if isempty(err.command)
+            return quoted_token === nothing ? "invalid command." : "invalid command $(quoted_token)."
+        else
+            return quoted_token === nothing ? "invalid subcommand." : "invalid subcommand $(quoted_token)."
+        end
+    else
+        return string("parse error of kind ", kind, ".")
+    end
+end
+
+function _render_parse_error(io::IO, err::ParseError)
+    invocation = _invocation_string(err)
+    description = _describe_parse_error(err)
+    if isempty(invocation)
+        print(io, description)
+    else
+        print(io, "In '", invocation, "', ", description)
+    end
+end
+
 function Base.showerror(io::IO, err::ParseError)
-    print(io, err.message)
+    _render_parse_error(io, err)
 end
 
-function _throw_parse_error(kind::Symbol, message::AbstractString, command_path::Vector{String}, levels::Vector{LevelResult};
+function _throw_parse_error(trace::_ParseTrace, kind::Symbol, command_path::Vector{String}, levels::Vector{LevelResult};
         argument::Union{Nothing, AbstractString} = nothing,
         token::Union{Nothing, AbstractString} = nothing,
         stopped::Bool = false,
-        stop_argument::Union{Nothing, AbstractString} = nothing)
+        stop_argument::Union{Nothing, AbstractString} = nothing,
+        argv_range::Union{Nothing, Tuple{Int, Int}, UnitRange{Int}} = nothing,
+        token_range::Union{Nothing, Tuple{Int, Int}, UnitRange{Int}} = nothing,
+        actual_occurs::Union{Nothing, Int} = nothing)
     arg_name = argument === nothing ? nothing : String(argument)
     token_name = token === nothing ? nothing : String(token)
     stop_name = stop_argument === nothing ? nothing : String(stop_argument)
-    throw(ParseError(kind, String(message), copy(command_path), copy(levels), arg_name, token_name, stopped, stop_name))
+    range_tuple = _normalize_range(argv_range)
+    token_tuple = _normalize_range(token_range)
+    throw(ParseError(
+        kind,
+        copy(command_path),
+        copy(levels),
+        arg_name,
+        token_name,
+        stopped,
+        stop_name,
+        range_tuple,
+        token_tuple,
+        actual_occurs,
+        trace.program,
+        copy(trace.argv),
+    ))
 end
 
 """
@@ -115,23 +327,25 @@ function _init_level(arguments::Vector{Argument}, lookup::Dict{String, Int}, pos
 end
 
 """
-    _ensure_required(level, command_path, levels)
+    _ensure_required(trace, level, command_path, levels)
 
 Verify that required arguments at a given level have been satisfied. Invoked
 after parsing completes (unless halted by a stop argument).
 """
-function _ensure_required(level::LevelResult, command_path::Vector{String}, levels::Vector{LevelResult})
+function _ensure_required(trace::_ParseTrace, level::LevelResult, command_path::Vector{String}, levels::Vector{LevelResult})
     for (idx, argument) in enumerate(level.arguments)
         provided = level.counts[idx]
         default_count = (argument.has_default && provided == 0) ? length(argument.default) : 0
         total = provided + default_count
         if total < argument.min_occurs
+            used_name = first(argument.names)
             _throw_parse_error(
+                trace,
                 :missing_required,
-                "Missing required argument: $(first(argument.names))",
                 command_path,
                 levels;
-                argument = first(argument.names),
+                argument = used_name,
+                actual_occurs = total,
             )
         end
     end
@@ -149,56 +363,84 @@ function _lookup_argument(level::LevelResult, name::String)
 end
 
 """
-    _validate_argument_value(argument, value, command_path, levels)
+    _validate_argument_value(trace, argument, value, command_path, levels, argv_index, token_range, alias)
 
 Check `value` against `choices` and `regex` constraints, throwing a `ParseError`
 when validation fails. Called for every stored value.
 """
-function _validate_argument_value(argument::Argument, value::String, command_path::Vector{String}, levels::Vector{LevelResult})
+function _validate_argument_value(
+        trace::_ParseTrace,
+        argument::Argument,
+        value::String,
+        command_path::Vector{String},
+        levels::Vector{LevelResult},
+        argv_index::Int,
+        token_range::Tuple{Int, Int},
+        alias::Union{Nothing, String},
+    )
+    used_name = alias === nothing ? first(argument.names) : alias
     if !isempty(argument.choices) && !(value in argument.choices)
         valid = join(argument.choices, ", ")
         _throw_parse_error(
+            trace,
             :invalid_value,
-            "Argument $(first(argument.names)) must be one of: $(valid)",
             command_path,
             levels;
-            argument = first(argument.names),
+            argument = used_name,
             token = value,
+            argv_range = _range_from_index(argv_index),
+            token_range = token_range,
         )
     end
     if argument.has_regex && match(argument.regex, value) === nothing
         _throw_parse_error(
+            trace,
             :invalid_value,
-            "Argument $(first(argument.names)) must match pattern $(argument.regex)",
             command_path,
             levels;
-            argument = first(argument.names),
+            argument = used_name,
             token = value,
+            argv_range = _range_from_index(argv_index),
+            token_range = token_range,
         )
     end
     return nothing
 end
 
 """
-    _set_value!(level, idx, value, command_path, levels)
+    _set_value!(trace, level, idx, value, command_path, levels, argv_index, token_range, alias)
 
 Store a value for the argument at `idx`, performing validation and respecting
 occurrence limits. Returns `true` when a stop argument halts parsing.
 """
-function _set_value!(level::LevelResult, idx::Int, value::String, command_path::Vector{String}, levels::Vector{LevelResult})
+function _set_value!(
+        trace::_ParseTrace,
+        level::LevelResult,
+        idx::Int,
+        value::String,
+        command_path::Vector{String},
+        levels::Vector{LevelResult},
+        argv_index::Int,
+        token_range::Tuple{Int, Int},
+        alias::Union{Nothing, String},
+    )
     argument = level.arguments[idx]
     count = level.counts[idx]
-    _validate_argument_value(argument, value, command_path, levels)
+    used_name = alias === nothing ? first(argument.names) : alias
+    _validate_argument_value(trace, argument, value, command_path, levels, argv_index, token_range, used_name)
     if argument.max_occurs == 1 && count == 1
         level.values[idx][1] = value
         return argument.stop
     elseif argument.max_occurs != _UNBOUNDED && count >= argument.max_occurs
         _throw_parse_error(
+            trace,
             :too_many_occurrences,
-            "Argument $(first(argument.names)) cannot be provided more than $(argument.max_occurs) times",
             command_path,
             levels;
-            argument = first(argument.names),
+            argument = used_name,
+            argv_range = _range_from_index(argv_index),
+            token_range = token_range,
+            actual_occurs = count + 1,
         )
     end
     push!(level.values[idx], value)
@@ -212,9 +454,18 @@ end
 Specialised wrapper around `_set_value!` for flags. Stores the string "1" and
 returns whether parsing should stop.
 """
-function _set_flag!(level::LevelResult, idx::Int, command_path::Vector{String}, levels::Vector{LevelResult})
+function _set_flag!(
+        trace::_ParseTrace,
+        level::LevelResult,
+        idx::Int,
+        command_path::Vector{String},
+        levels::Vector{LevelResult},
+        argv_index::Int,
+        token_range::Tuple{Int, Int},
+        alias::Union{Nothing, String},
+    )
     argument = level.arguments[idx]
-    return _set_value!(level, idx, argument.flag_value, command_path, levels)
+    return _set_value!(trace, level, idx, argument.flag_value, command_path, levels, argv_index, token_range, alias)
 end
 
 """
@@ -258,13 +509,20 @@ function _next_positional_index(level::LevelResult, cursor::Int)
 end
 
 """
-    _consume_option!(levels, argv, i, token, command_path)
+    _consume_option!(trace, levels, argv, i, token, command_path)
 
 Handle a long option token (e.g. `--name` or `--name=value`). Consumes any
 associated value, updates the active level, and returns the next index plus an
 optional stop-argument name.
 """
-function _consume_option!(levels::Vector{LevelResult}, argv::Vector{String}, i::Int, token::String, command_path::Vector{String})
+function _consume_option!(
+        trace::_ParseTrace,
+        levels::Vector{LevelResult},
+        argv::Vector{String},
+        i::Int,
+        token::String,
+        command_path::Vector{String},
+    )
     level = levels[end]
     eq_index = findfirst(==('='), token)
     name = token
@@ -277,63 +535,85 @@ function _consume_option!(levels::Vector{LevelResult}, argv::Vector{String}, i::
     end
     idx = _lookup_argument(level, name)
     if idx === nothing
-        _throw_parse_error(:unknown_option, "Unknown option: $(name)", command_path, levels; token = name)
+        range = (firstindex(token), eq_index === nothing ? lastindex(token) : prevind(token, eq_index))
+        _throw_parse_error(
+            trace,
+            :unknown_option,
+            command_path,
+            levels;
+            token = name,
+            argv_range = (i, i),
+            token_range = range,
+        )
     end
     argument = level.arguments[idx]
     if argument.positional
         _throw_parse_error(
+            trace,
             :invalid_option_usage,
-            "Positional argument $(first(argument.names)) cannot be used as an option",
             command_path,
             levels;
-            argument = first(argument.names),
+            argument = name,
             token = name,
+            argv_range = (i, i),
+            token_range = (firstindex(token), lastindex(token)),
         )
     end
     if argument.flag
         if inline_value !== nothing
             _throw_parse_error(
+                trace,
                 :flag_value,
-                "Flag $(name) does not accept a value",
                 command_path,
                 levels;
-                argument = first(argument.names),
+                argument = name,
                 token = token,
+                argv_range = (i, i),
+                token_range = (firstindex(token), lastindex(token)),
             )
         end
-        triggered = _set_flag!(level, idx, command_path, levels)
+        triggered = _set_flag!(trace, level, idx, command_path, levels, i, (firstindex(token), lastindex(token)), name)
         stop_name = triggered ? name : nothing
         return i + 1, stop_name
     end
     if inline_value !== nothing
-        triggered = _set_value!(level, idx, inline_value, command_path, levels)
+        triggered = _set_value!(trace, level, idx, inline_value, command_path, levels, i, (firstindex(token), lastindex(token)), name)
         stop_name = triggered ? name : nothing
         return i + 1, stop_name
     end
     next_index = i + 1
     if next_index > length(argv)
         _throw_parse_error(
+            trace,
             :missing_option_value,
-            "Option $(name) requires a value",
             command_path,
             levels;
-            argument = first(argument.names),
+            argument = name,
             token = name,
+            argv_range = (i, i),
+            token_range = (firstindex(token), lastindex(token)),
         )
     end
-    triggered = _set_value!(level, idx, argv[next_index], command_path, levels)
+    triggered = _set_value!(trace, level, idx, argv[next_index], command_path, levels, i, (firstindex(token), lastindex(token)), name)
     stop_name = triggered ? name : nothing
     return next_index + 1, stop_name
 end
 
 """
-    _consume_short_option!(levels, argv, i, token, command_path)
+    _consume_short_option!(trace, levels, argv, i, token, command_path)
 
 Process short options (tokens beginning with a single `-`). Supports bundled
 flags (e.g. `-vvv`), inline values (e.g. `-n3`), and treats forms such as
 `-x=3` as the option `-x` with value `"=3"`.
 """
-function _consume_short_option!(levels::Vector{LevelResult}, argv::Vector{String}, i::Int, token::String, command_path::Vector{String})
+function _consume_short_option!(
+        trace::_ParseTrace,
+        levels::Vector{LevelResult},
+        argv::Vector{String},
+        i::Int,
+        token::String,
+        command_path::Vector{String},
+    )
     level = levels[end]
     eq_index = findfirst(==('='), token)
     if eq_index !== nothing
@@ -341,60 +621,98 @@ function _consume_short_option!(levels::Vector{LevelResult}, argv::Vector{String
         name = token[firstindex(token):name_end]
         idx = _lookup_argument(level, name)
         if idx === nothing
-            _throw_parse_error(:unknown_option, "Unknown option: $(name)", command_path, levels; token = name)
+            _throw_parse_error(
+                trace,
+                :unknown_option,
+                command_path,
+                levels;
+                token = name,
+                argv_range = (i, i),
+                token_range = (firstindex(token), name_end),
+            )
         end
         argument = level.arguments[idx]
         if argument.flag
             _throw_parse_error(
+                trace,
                 :flag_value,
-                "Flag $(name) does not accept a value",
                 command_path,
                 levels;
-                argument = first(argument.names),
+                argument = name,
                 token = token,
+                argv_range = (i, i),
+                token_range = (firstindex(token), lastindex(token)),
             )
         end
         value = token[eq_index:end]
-        triggered = _set_value!(level, idx, value, command_path, levels)
+        triggered = _set_value!(trace, level, idx, value, command_path, levels, i, (firstindex(token), name_end), name)
         stop_name = triggered ? name : nothing
         return i + 1, stop_name
     end
     dash_index = firstindex(token)
     char_index = nextind(token, dash_index)
     if char_index > lastindex(token)
-        _throw_parse_error(:unknown_option, "Unknown option: $(token)", command_path, levels; token = token)
+        _throw_parse_error(
+            trace,
+            :unknown_option,
+            command_path,
+            levels;
+            token = token,
+            argv_range = (i, i),
+            token_range = (firstindex(token), lastindex(token)),
+        )
     end
     next_index = nextind(token, char_index)
     name = token[dash_index:prevind(token, next_index)]
     idx = _lookup_argument(level, name)
     if idx === nothing
-        _throw_parse_error(:unknown_option, "Unknown option: $(name)", command_path, levels; token = name)
+        _throw_parse_error(
+            trace,
+            :unknown_option,
+            command_path,
+            levels;
+            token = name,
+            argv_range = (i, i),
+            token_range = (dash_index, prevind(token, next_index)),
+        )
     end
     argument = level.arguments[idx]
     if next_index > lastindex(token)
         if argument.flag
-            triggered = _set_flag!(level, idx, command_path, levels)
+            triggered = _set_flag!(trace, level, idx, command_path, levels, i, (dash_index, prevind(token, next_index)), name)
             stop_name = triggered ? name : nothing
             return i + 1, stop_name
         end
         next_arg_index = i + 1
         if next_arg_index > length(argv)
             _throw_parse_error(
+                trace,
                 :missing_option_value,
-                "Option $(name) requires a value",
                 command_path,
                 levels;
-                argument = first(argument.names),
+                argument = name,
                 token = name,
+                argv_range = (i, i),
+                token_range = (dash_index, prevind(token, next_index)),
             )
         end
-        triggered = _set_value!(level, idx, argv[next_arg_index], command_path, levels)
+        triggered = _set_value!(
+            trace,
+            level,
+            idx,
+            argv[next_arg_index],
+            command_path,
+            levels,
+            i,
+            (dash_index, prevind(token, next_index)),
+            name,
+        )
         stop_name = triggered ? name : nothing
         return next_arg_index + 1, stop_name
     end
     if argument.flag
         stop_name = nothing
-        triggered = _set_flag!(level, idx, command_path, levels)
+        triggered = _set_flag!(trace, level, idx, command_path, levels, i, (dash_index, prevind(token, next_index)), name)
         if triggered
             stop_name = name
         end
@@ -405,19 +723,30 @@ function _consume_short_option!(levels::Vector{LevelResult}, argv::Vector{String
             rest_name = string('-', short_piece)
             rest_idx = _lookup_argument(level, rest_name)
             if rest_idx === nothing
-                _throw_parse_error(:unknown_option, "Unknown option: $(rest_name)", command_path, levels; token = rest_name)
+                _throw_parse_error(
+                    trace,
+                    :unknown_option,
+                    command_path,
+                    levels;
+                    token = rest_name,
+                    argv_range = (i, i),
+                    token_range = (rest_index, prevind(token, char_end)),
+                )
             end
             rest_argument = level.arguments[rest_idx]
             if !rest_argument.flag
                 _throw_parse_error(
+                    trace,
                     :unsupported_short_option,
-                    "Unsupported short option bundle: $(token)",
                     command_path,
                     levels;
-                    token = token,
+                    argument = rest_name,
+                    token = rest_name,
+                    argv_range = (i, i),
+                    token_range = (rest_index, prevind(token, char_end)),
                 )
             end
-            triggered = _set_flag!(level, rest_idx, command_path, levels)
+            triggered = _set_flag!(trace, level, rest_idx, command_path, levels, i, (rest_index, prevind(token, char_end)), rest_name)
             if triggered
                 stop_name = rest_name
             end
@@ -426,7 +755,7 @@ function _consume_short_option!(levels::Vector{LevelResult}, argv::Vector{String
         return i + 1, stop_name
     end
     value = token[next_index:end]
-    triggered = _set_value!(level, idx, value, command_path, levels)
+    triggered = _set_value!(trace, level, idx, value, command_path, levels, i, (dash_index, prevind(token, next_index)), name)
     stop_name = triggered ? name : nothing
     return i + 1, stop_name
 end
@@ -439,6 +768,7 @@ active commands, dispatches options/flags, and produces a `Parsed` result. All
 error handling (throwing `ParseError`s) lives here.
 """
 function _execute_parse(parser::Parser, argv::Vector{String})
+    trace = _ParseTrace(_help_program_placeholder(parser), copy(argv))
     levels = LevelResult[]
     push!(levels, _init_level(parser.arguments, parser.argument_lookup, parser.positional_indices, parser.positional_after_first))
     positional_cursors = Int[1]
@@ -479,7 +809,7 @@ function _execute_parse(parser::Parser, argv::Vector{String})
         end
         positional_lock = level.positional_after_first && level.positional_consumed
         if allow_options && !positional_lock && startswith(token, "--") && token != "--"
-            i, stop_name = _consume_option!(levels, argv, i, token, command_path)
+            i, stop_name = _consume_option!(trace, levels, argv, i, token, command_path)
             if stop_name !== nothing
                 stopped = true
                 if stop_argument === nothing
@@ -489,7 +819,7 @@ function _execute_parse(parser::Parser, argv::Vector{String})
             end
             continue
         elseif allow_options && !positional_lock && startswith(token, "-") && token != "-"
-            i, stop_name = _consume_short_option!(levels, argv, i, token, command_path)
+            i, stop_name = _consume_short_option!(trace, levels, argv, i, token, command_path)
             if stop_name !== nothing
                 stopped = true
                 if stop_argument === nothing
@@ -501,10 +831,29 @@ function _execute_parse(parser::Parser, argv::Vector{String})
         end
         positional_index, cursor_position = _next_positional_index(level, positional_cursors[end])
         if positional_index === nothing
-            _throw_parse_error(:unexpected_positional, "Unexpected positional argument: $(token)", command_path, levels; token = token)
+            if !isempty(current.commands) && !_has_outstanding_required(level)
+                _throw_parse_error(
+                    trace,
+                    :unknown_command,
+                    command_path,
+                    levels;
+                    token = token,
+                    argv_range = (i, i),
+                    token_range = (firstindex(token), lastindex(token)),
+                )
+            end
+            _throw_parse_error(
+                trace,
+                :unexpected_positional,
+                command_path,
+                levels;
+                token = token,
+                argv_range = (i, i),
+                token_range = (firstindex(token), lastindex(token)),
+            )
         end
         argument = level.arguments[positional_index]
-        triggered = _set_value!(level, positional_index, token, command_path, levels)
+        triggered = _set_value!(trace, level, positional_index, token, command_path, levels, i, (firstindex(token), lastindex(token)), first(argument.names))
         if level.positional_after_first && !level.positional_consumed
             level.positional_consumed = true
         end
@@ -524,14 +873,21 @@ function _execute_parse(parser::Parser, argv::Vector{String})
     end
     if !stopped
         for level in levels
-            _ensure_required(level, command_path, levels)
+            _ensure_required(trace, level, command_path, levels)
         end
         for idx in eachindex(command_requirements)
             if command_requirements[idx] && !command_satisfied[idx]
                 label = level_labels[idx]
                 is_root = level_is_root[idx]
-                message = is_root ? "Expected a command" : "Expected a sub-command for $(label)"
-                _throw_parse_error(:missing_command, message, command_path, levels; token = label)
+                kind = is_root ? :missing_command : :missing_subcommand
+                _throw_parse_error(
+                    trace,
+                    kind,
+                    command_path,
+                    levels;
+                    token = label,
+                    argv_range = _EMPTY_RANGE,
+                )
             end
         end
     end
@@ -558,11 +914,38 @@ function _help_program_placeholder(parser::Parser)
     if !isempty(parser.help_program)
         return parser.help_program
     end
-    program_name = Base.PROGRAM_NAME
-    if program_name isa AbstractString && !isempty(program_name)
-        return String(program_name)
+    program_file = nothing
+    if isdefined(Base, :PROGRAM_FILE)
+        raw_file = getfield(Base, :PROGRAM_FILE)
+        if raw_file isa AbstractString && !isempty(raw_file)
+            program_file = Base.basename(String(raw_file))
+        end
     end
-    return "<program>"
+    program_name = nothing
+    if isdefined(Base, :PROGRAM_NAME)
+        raw_name = getfield(Base, :PROGRAM_NAME)
+        if raw_name isa AbstractString && !isempty(raw_name)
+            program_name = Base.basename(String(raw_name))
+        end
+    end
+    if program_name === nothing
+        cmd = Base.julia_cmd()
+        if !isempty(cmd.exec)
+            exec = cmd.exec[1]
+            if exec isa AbstractString && !isempty(exec)
+                program_name = Base.basename(String(exec))
+            end
+        end
+    end
+    if program_name !== nothing && program_file !== nothing
+        return string(program_name, ' ', program_file)
+    elseif program_name !== nothing
+        return program_name
+    elseif program_file !== nothing
+        return program_file
+    else
+        return "<program>"
+    end
 end
 
 function _resolve_help_target(parser::Parser, command_path::Vector{String}, depth::Int)
@@ -722,7 +1105,8 @@ function parse(parser::Parser, argv::Vector{String}; error_mode::Symbol = :exit,
             elseif error_mode === :return
                 return parsed
             else
-                println(io, err.message)
+                _render_parse_error(io, err)
+                println(io)
                 exit(exit_code)
             end
         else
