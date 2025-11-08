@@ -20,17 +20,16 @@ construction:
     expects values.
   * `stop::Bool` – indicates that parsing should halt once this argument is
     seen.
-  * `has_default::Bool` – whether default values were supplied.
+  * `has_default::Bool` – whether default values were supplied explicitly.
   * `default::Vector{String}` – default values represented as strings.
   * `positional::Bool` – `true` when the argument is positional.
   * `min_occurs::Int` / `max_occurs::Int` – occurrence bounds.
-  * `flag_value::String` – value recorded each time a flag is triggered.
   * `choices::Vector{String}` – explicit allowlist of permitted values.
   * `has_regex::Bool` / `regex::Regex` – pattern validation metadata.
 
-Flags always default to the string "0" (reported as falsey) and record "1"
-when encountered. Repeated arguments accumulate values in the order they were
-provided.
+Flags always default to an empty value list and record an empty string "" each
+time they are encountered. Repeated arguments accumulate values in the order
+they were provided.
 """
 struct Argument
     names::Vector{String}
@@ -42,7 +41,6 @@ struct Argument
     positional::Bool
     min_occurs::Int
     max_occurs::Int
-    flag_value::String
     choices::Vector{String}
     has_regex::Bool
     regex::Regex
@@ -472,23 +470,27 @@ two characters long (e.g. `"-h"`). Keyword arguments:
 
   * `required` – force the argument to be required (`true`), optional (`false`),
     or let Cliff infer the requirement (`nothing`).
-  * `default` – default value(s). Non-string inputs are rendered via `repr` so
+  * `default` – default value(s). Optional arguments default to an empty value
+    list unless overridden. Non-string inputs are rendered via `repr` so
     `default = 5` behaves as expected.
-  * `flag` – mark the argument as a flag. Flags always default to "0" and
-    record "1" for each occurrence.
+  * `flag` – mark the argument as a flag. Flags always use an empty default and
+    append an empty string for each occurrence.
   * `stop` – halt parsing once the argument has been consumed.
   * `repeat`, `min_repeat`, `max_repeat` – control occurrence counts.
   * `choices` – restrict accepted values to a specific list.
   * `regex` – require values to match a `Regex`.
   * `auto_help` – mark the argument as an automatic help flag.
 
-Flags cannot customise defaults or `flag_value`; they always behave like
-booleans with string representations "0"/"1". When `default` is a vector each
-element is stored in the order provided, making `default = [1, 2, 3]` suitable
-for repeatable arguments. Internally this constructor validates combinations
-and prepares lookup tables consumed by `Parser`.
+Flags cannot customise their defaults; they always behave like booleans backed
+by empty-string markers. When `default` is a vector each element is stored in
+the order provided, making `default = [1, 2, 3]` suitable for repeatable
+arguments. Internally this constructor validates combinations and prepares
+lookup tables consumed by `Parser`.
 """
-function Argument(names; required::Union{Bool, Nothing} = nothing, default = nothing, flag::Bool = false, flag_value = nothing, stop::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing, choices = nothing, regex = nothing, auto_help::Bool = false, help::AbstractString = "", help_val::Union{Nothing, AbstractString} = nothing)
+function Argument(names; required::Union{Bool, Nothing} = nothing, default = nothing, flag::Bool = false,
+                  stop::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing,
+                  choices = nothing, regex = nothing, auto_help::Bool = false, help::AbstractString = "",
+                  help_val::Union{Nothing, AbstractString} = nothing)
     collected = _collect_names(names)
     positional = any(!startswith(name, "-") for name in collected)
     option = any(startswith(name, "-") for name in collected)
@@ -515,18 +517,15 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
             end
         end
     end
-    if flag_value !== nothing
-        throw(ArgumentError("flag_value is not configurable"))
-    end
     if stop && (repeat !== nothing || min_repeat !== nothing || max_repeat !== nothing)
         throw(ArgumentError("Stop arguments cannot be repeatable"))
     end
     if flag && default !== nothing
         throw(ArgumentError("Flags do not support default values"))
     end
-    has_default = !flag && default !== nothing
+    explicit_default = !flag && default !== nothing
     default_values = String[]
-    if has_default
+    if explicit_default
         if default isa AbstractVector
             default_values = String[]
             for item in default
@@ -542,16 +541,24 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
             push!(default_values, repr(default))
         end
     end
-    computed_flag_value = flag ? "1" : ""
     repeat_implies_optional = _repeat_allows_zero_min(repeat, min_repeat)
-    has_sensible_default = has_default || flag || repeat_implies_optional || stop
-    if required === false && !has_sensible_default
-        throw(ArgumentError("required=false is only supported when the argument is optional by default"))
+    if required === nothing
+        if positional
+            required_flag = !(explicit_default || repeat_implies_optional || stop)
+        else
+            required_flag = false
+        end
+    else
+        required_flag = required
     end
-    required_flag = required === nothing ? !has_sensible_default : required
     min_occurs, max_occurs = _determine_occurrences(required_flag, repeat, min_repeat, max_repeat)
-    if has_default && max_occurs != _UNBOUNDED && length(default_values) > max_occurs
-        throw(ArgumentError("Default value count exceeds maximum occurrences"))
+    if explicit_default
+        if max_occurs != _UNBOUNDED && length(default_values) > max_occurs
+            throw(ArgumentError("Default value count exceeds maximum occurrences"))
+        end
+        if length(default_values) < min_occurs
+            throw(ArgumentError("Default value count does not satisfy minimum occurrences"))
+        end
     end
     choice_values = choices === nothing ? String[] : _normalize_choices(choices)
     regex_obj = regex === nothing ? r"" : _normalize_regex(regex)
@@ -562,8 +569,8 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
                 throw(ArgumentError("Default value $(repr(value)) is not permitted by choices"))
             end
         end
-        if flag && !("1" in choice_values && "0" in choice_values)
-            throw(ArgumentError("Flags require choices to include both \"0\" and \"1\""))
+        if flag && !("" in choice_values)
+            throw(ArgumentError("Flags require choices to include the empty string"))
         end
     end
     if has_regex
@@ -573,15 +580,16 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
             end
         end
         if flag
-            if match(regex_obj, "0") === nothing || match(regex_obj, computed_flag_value) === nothing
-                throw(ArgumentError("Flags require regex patterns that match both \"0\" and \"1\""))
+            if match(regex_obj, "") === nothing
+                throw(ArgumentError("Flags require regex patterns that match the empty string"))
             end
         end
     end
     help_string = String(help)
     default_help_val = positional ? uppercase(first(collected)) : "VAL"
     help_val_string = help_val === nothing ? default_help_val : String(help_val)
-    return Argument(collected, min_occurs > 0, flag, stop, has_default, default_values, positional, min_occurs, max_occurs, computed_flag_value, choice_values, has_regex, regex_obj, auto_help, help_string, help_val_string)
+    required_field = required_flag || length(default_values) < min_occurs
+    return Argument(collected, required_field, flag, stop, explicit_default, default_values, positional, min_occurs, max_occurs, choice_values, has_regex, regex_obj, auto_help, help_string, help_val_string)
 end
 
 """
