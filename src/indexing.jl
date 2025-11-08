@@ -3,10 +3,9 @@
 """
     _argument_values(level, idx)
 
-Return all recorded values for the argument at `idx`. The returned vector
-contains only values explicitly provided on the command line, leaving defaults
-to be handled by scalar lookups. Flags therefore report an empty vector when
-absent, allowing `args[name, Vector]` to yield `[]`.
+Return all recorded values for the argument at `idx`, including defaults and
+overrides applied during parsing. The returned vector matches the data exposed
+via typed lookups such as `args[name, +]`.
 """
 function _argument_values(level::LevelResult, idx::Int)
     stored = level.values[idx]
@@ -48,8 +47,6 @@ function _single_string(level::LevelResult, idx::Int, values::Vector{String})
     end
     if !isempty(values)
         return values[1]
-    elseif argument.has_default && argument.default_occurs > 0
-        return argument.default
     elseif argument.flag
         return "0"
     else
@@ -67,13 +64,7 @@ function _convert_argument(::Type{Union{T, Nothing}}, level::LevelResult, idx::I
         throw(ArgumentError("Argument $(first(argument.names)) accepts multiple values; use args[name, Vector] instead"))
     end
     if isempty(values)
-        if argument.has_default && argument.default_occurs > 0
-            return _convert_value(T, argument.default)
-        elseif argument.flag
-            return _convert_value(T, "0")
-        else
-            return nothing
-        end
+        return nothing
     end
     return _convert_value(T, values[1])
 end

@@ -321,7 +321,7 @@ flag records whether the level should treat subsequent tokens as positional
 after consuming the first positional argument.
 """
 function _init_level(arguments::Vector{Argument}, lookup::Dict{String, Int}, positional_indices::Vector{Int}, positional_after_first::Bool)
-    values = [String[] for _ in arguments]
+    values = [copy(argument.default) for argument in arguments]
     counts = fill(0, length(arguments))
     return LevelResult(arguments, lookup, positional_indices, values, counts, positional_after_first, false)
 end
@@ -334,9 +334,7 @@ after parsing completes (unless halted by a stop argument).
 """
 function _ensure_required(trace::_ParseTrace, level::LevelResult, command_path::Vector{String}, levels::Vector{LevelResult})
     for (idx, argument) in enumerate(level.arguments)
-        provided = level.counts[idx]
-        default_count = (argument.has_default && provided == 0) ? argument.default_occurs : 0
-        total = provided + default_count
+        total = length(level.values[idx])
         if total < argument.min_occurs
             used_name = first(argument.names)
             _throw_parse_error(
@@ -443,7 +441,12 @@ function _set_value!(
             actual_occurs = count + 1,
         )
     end
-    push!(level.values[idx], value)
+    stored = level.values[idx]
+    if count < length(stored)
+        stored[count + 1] = value
+    else
+        push!(stored, value)
+    end
     level.counts[idx] = count + 1
     return argument.stop
 end
@@ -477,12 +480,8 @@ values. Used to prevent premature command transitions.
 function _has_outstanding_required(level::LevelResult)
     for idx in level.positional_indices
         argument = level.arguments[idx]
-        provided = level.counts[idx]
-        if provided < argument.min_occurs
-            default_count = (argument.has_default && provided == 0) ? argument.default_occurs : 0
-            if provided + default_count < argument.min_occurs
-                return true
-            end
+        if length(level.values[idx]) < argument.min_occurs
+            return true
         end
     end
     return false

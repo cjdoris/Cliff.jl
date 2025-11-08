@@ -21,8 +21,7 @@ construction:
   * `stop::Bool` – indicates that parsing should halt once this argument is
     seen.
   * `has_default::Bool` – whether default values were supplied.
-  * `default::String` – scalar default value represented as a string.
-  * `default_occurs::Int` – number of implicit occurrences contributed by the default.
+  * `default::Vector{String}` – default values expressed as strings.
   * `positional::Bool` – `true` when the argument is positional.
   * `min_occurs::Int` / `max_occurs::Int` – occurrence bounds.
   * `flag_value::String` – value recorded each time a flag is triggered.
@@ -39,8 +38,7 @@ struct Argument
     flag::Bool
     stop::Bool
     has_default::Bool
-    default::String
-    default_occurs::Int
+    default::Vector{String}
     positional::Bool
     min_occurs::Int
     max_occurs::Int
@@ -485,11 +483,12 @@ two characters long (e.g. `"-h"`). Keyword arguments:
   * `auto_help` – mark the argument as an automatic help flag.
 
 Flags cannot customise defaults or `flag_value`; they always behave like
-booleans with string representations "0"/"1". When `default` is a vector we
-retain the first entry for scalar retrieval and treat the length as implicit
-occurrences, making `default = [1, 2, 3]` suitable for repeatable arguments.
-Internally this constructor validates combinations and prepares lookup tables
-consumed by `Parser`.
+booleans with string representations "0"/"1". Other arguments accept a vector
+of default strings whose entries seed the collected value list – each
+occurrence replaces the corresponding position and additional occurrences are
+appended. This keeps scalar and vector retrieval consistent while letting
+defaults satisfy repetition bounds. Internally this constructor validates
+combinations and prepares lookup tables consumed by `Parser`.
 """
 function Argument(names; required::Union{Bool, Nothing} = nothing, default = nothing, flag::Bool = false, flag_value = nothing, stop::Bool = false, repeat = nothing, min_repeat = nothing, max_repeat = nothing, choices = nothing, regex = nothing, auto_help::Bool = false, help::AbstractString = "", help_val::Union{Nothing, AbstractString} = nothing)
     collected = _collect_names(names)
@@ -529,8 +528,6 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
     end
     has_default = !flag && default !== nothing
     default_values = String[]
-    default_string = ""
-    default_occurs = 0
     if has_default
         if default isa AbstractVector
             for item in default
@@ -545,14 +542,11 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
         else
             push!(default_values, repr(default))
         end
-        default_occurs = length(default_values)
-        if default_occurs > 0
-            default_string = default_values[1]
-        end
     end
+    default_length = length(default_values)
     computed_flag_value = flag ? "1" : ""
     repeat_implies_optional = _repeat_allows_zero_min(repeat, min_repeat)
-    has_sensible_default = has_default || flag || repeat_implies_optional || stop
+    has_sensible_default = (default_length > 0) || flag || repeat_implies_optional || stop
     if positional && required === false && !has_sensible_default
         throw(ArgumentError("required=false is only supported when the argument is optional by default"))
     end
@@ -562,8 +556,13 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
         required_flag = required
     end
     min_occurs, max_occurs = _determine_occurrences(required_flag, repeat, min_repeat, max_repeat)
-    if has_default && max_occurs != _UNBOUNDED && default_occurs > max_occurs
-        throw(ArgumentError("Default value count exceeds maximum occurrences"))
+    if default_length > 0
+        if max_occurs != _UNBOUNDED && default_length > max_occurs
+            throw(ArgumentError("Default value count exceeds maximum occurrences"))
+        end
+        if default_length < min_occurs
+            throw(ArgumentError("Default value count below minimum occurrences"))
+        end
     end
     choice_values = choices === nothing ? String[] : _normalize_choices(choices)
     regex_obj = regex === nothing ? r"" : _normalize_regex(regex)
@@ -593,7 +592,7 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
     help_string = String(help)
     default_help_val = positional ? uppercase(first(collected)) : "VAL"
     help_val_string = help_val === nothing ? default_help_val : String(help_val)
-    return Argument(collected, min_occurs > 0, flag, stop, has_default, default_string, default_occurs, positional, min_occurs, max_occurs, computed_flag_value, choice_values, has_regex, regex_obj, auto_help, help_string, help_val_string)
+    return Argument(collected, min_occurs > 0, flag, stop, has_default, default_values, positional, min_occurs, max_occurs, computed_flag_value, choice_values, has_regex, regex_obj, auto_help, help_string, help_val_string)
 end
 
 """

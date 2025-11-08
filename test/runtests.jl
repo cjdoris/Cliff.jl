@@ -5,8 +5,7 @@ using Cliff
     arg = Argument(["--name", "-n"]; default = "guest")
     @test !arg.flag
     @test arg.names == ["--name", "-n"]
-    @test arg.default == "guest"
-    @test arg.default_occurs == 1
+    @test arg.default == ["guest"]
     @test arg.has_default
     @test arg.min_occurs == 0
     @test !arg.positional
@@ -14,8 +13,7 @@ using Cliff
     flag = Argument("--verbose"; flag = true)
     @test flag.flag
     @test !flag.has_default
-    @test flag.default == ""
-    @test flag.default_occurs == 0
+    @test flag.default == String[]
     @test flag.flag_value == "1"
 
     @test_throws ArgumentError Argument("--answer"; flag = true, default = "0")
@@ -62,12 +60,10 @@ using Cliff
     @test auto_help_arg.stop
 
     numeric_default = Argument("--count"; default = 5)
-    @test numeric_default.default == "5"
-    @test numeric_default.default_occurs == 1
+    @test numeric_default.default == ["5"]
 
     vector_default = Argument("--numbers"; repeat = true, default = [1, "two", 3.5])
-    @test vector_default.default == "1"
-    @test vector_default.default_occurs == 3
+    @test vector_default.default == ["1", "two", "3.5"]
 
     positional_help = Argument("input")
     @test positional_help.help == ""
@@ -103,6 +99,7 @@ using Cliff
     @test_throws ArgumentError Argument("decreasing-repeat"; repeat = 2:1)
     @test_throws ArgumentError Argument("float-repeat"; repeat = 0:1:1.5)
     @test_throws ArgumentError Argument("too-many-defaults"; max_repeat = 1, default = ["a", "b"])
+    @test_throws ArgumentError Argument("too-short-default"; repeat = 2, default = ["only"])
 end
 
 @testset "Basic parsing" begin
@@ -133,10 +130,43 @@ end
     @test args["input", 0, String] == "input.txt"
     @test args["input", Vector{String}] == ["input.txt"]
     @test args["--threads", Vector{String}] == ["4"]
-    @test args["output", Vector{String}] == String[]
+    @test args["output", Vector{String}] == ["out.txt"]
     @test_throws KeyError args["--missing"]
     @test_throws ArgumentError args["--threads", 5]
     @test_throws KeyError args["--threads", 0]
+end
+
+@testset "Default vectors" begin
+    parser = Parser([
+        Argument("--pair"; repeat = 2, default = ["left", "right"]),
+        Argument("--optional"; repeat = 0:3),
+        Argument("--flag"; flag = true),
+        Argument("--toggle"; flag = true, repeat = true)
+    ])
+
+    defaults = parser(String[]; error_mode = :throw)
+    @test defaults["--pair", +] == ["left", "right"]
+    @test_throws ArgumentError defaults["--pair"]
+    @test defaults["--optional", +] == String[]
+    @test !defaults["--flag", Bool]
+    @test defaults["--flag", +] == String[]
+    @test defaults["--toggle", Int] == 0
+
+    overrides = parser(["--pair", "alpha", "--pair", "beta"]; error_mode = :throw)
+    @test overrides["--pair", +] == ["alpha", "beta"]
+
+    toggled = parser(["--toggle", "--toggle"]; error_mode = :throw)
+    @test toggled["--toggle", +] == ["1", "1"]
+    @test toggled["--toggle", Int] == 2
+
+    needs = Parser([Argument("--need-two"; repeat = 2)])
+    err = try
+        needs(String[]; error_mode = :throw)
+    catch ex
+        ex
+    end
+    @test err isa ParseError
+    @test err.kind == :missing_required
 end
 
 @testset "Value validation" begin
@@ -484,7 +514,7 @@ end
     @test args["--ints", Int, +] == [1, 2]
     @test args["--floats", Vector{Float64}] == [0.5, 1.5]
     @test args["--floats", Float64, +] == [0.5, 1.5]
-    @test args["--preset", Vector{Int}] == Int[]
+    @test args["--preset", Vector{Int}] == [1, 2, 3]
     @test args["--ratio", Union{String, Nothing}] == "2.5"
     @test args["--ratio", Float64, -] == 2.5
     @test args["--flag", -] == "1"
@@ -498,12 +528,12 @@ end
     @test defaults["--flag", Vector{Bool}] == Bool[]
     @test defaults["--ints", Vector{Int}] == Int[]
     @test defaults["--floats", Vector{Float64}] == Float64[]
-    @test defaults["--preset", Vector{Int}] == Int[]
+    @test defaults["--preset", Vector{Int}] == [1, 2, 3]
     @test defaults["--ratio", Union{String, Nothing}] == "3.14"
     @test defaults["--count", Int, -] == 42
-    @test defaults["--flag", Union{String, Nothing}] == "0"
-    @test defaults["--flag", Bool, -] == false
-    @test defaults["--flag", -] == "0"
+    @test defaults["--flag", Union{String, Nothing}] === nothing
+    @test defaults["--flag", Bool, -] === nothing
+    @test defaults["--flag", -] === nothing
     @test_throws ArgumentError defaults["--floats", Float64, -]
 end
 
@@ -517,9 +547,9 @@ end
     @test args["--opt", Vector{String}] == String[]
     @test !args["--flag", Bool]
     @test args["--flag", Vector{String}] == String[]
-    @test args["--flag", Union{String, Nothing}] == "0"
-    @test args["--flag", Bool, -] == false
-    @test args["--flag", -] == "0"
+    @test args["--flag", Union{String, Nothing}] === nothing
+    @test args["--flag", Bool, -] === nothing
+    @test args["--flag", -] === nothing
     @test args["--opt", Union{String, Nothing}] === nothing
     @test args["--opt", -] === nothing
     @test_throws ArgumentError args["--opt"]

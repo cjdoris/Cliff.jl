@@ -13,7 +13,7 @@ using Cliff
 hello = Parser([
     Argument("name"),
     Argument("--uppercase"; flag = true),
-    Argument("--excitement"; default = "1"),
+    Argument("--excitement"; default = ["1"]),
 ])
 
 function greet(argv)
@@ -51,8 +51,10 @@ Values are stored as strings but can be converted when accessed from a `Parsed` 
 - `args["name"]` or `args["name", String]` returns the raw string value.
 - `args["name", Bool]` recognises `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off` (case insensitive).
 - `args["name", T]` uses `Base.parse(T, value)` for any type `T` with a parsing method, such as `Int`, `Float64`, or `UInt`.
-- `args["name", Vector{T}]` (or the shorthand `args["name", T, +]`) converts each value provided on the command line—defaults are not injected.
-- `args["name", Union{String, Nothing}]` returns `nothing` when the argument was optional, not supplied, and has no default. Use `args["name", T, -]` (or `args["name", -]` for strings) as a shorthand for optional typed lookups that honour defaults (including the implicit `"0"` for flags).
+- `args["name", Vector{T}]` (or the shorthand `args["name", T, +]`) converts every stored value—including defaults—into `T`.
+- `args["name", Union{String, Nothing}]` returns `nothing` when the argument's value list is empty. Use `args["name", T, -]` (or `args["name", -]` for strings) as a shorthand for optional typed lookups.
+
+Defaults are expressed as vectors of strings. Each argument's value list starts as a copy of its default, gains explicit values in order, and appends any extra occurrences. This keeps scalar and vector lookups consistent: `args[name]` reads the first entry when it exists, while `args[name, +]` reports the full list with defaults and overrides applied.
 
 Single-valued lookups such as `args["--mode"]` raise an `ArgumentError` if the option was omitted and has no default. Pair them with the optional retrieval form when you need to distinguish between “missing” and “present with a default”.
 
@@ -69,8 +71,8 @@ Cliff can validate incoming values without custom code:
 Both options apply to positional arguments, options, and flags, and they work alongside repetition controls. When validation fails Cliff raises a `ParseError` with kind `:invalid_value` so you can render a friendly message or surface it to the user as-is.
 
 ```julia
-Argument("mode"; choices = ["fast", "slow"], default = "fast")
-Argument("--name"; regex = r"^[a-z]+$", default = "guest")
+Argument("mode"; choices = ["fast", "slow"], default = ["fast"])
+Argument("--name"; regex = r"^[a-z]+$", default = ["guest"])
 Argument("--tag"; choices = ["red", "blue"], repeat = true)
 ```
 
@@ -83,13 +85,13 @@ using Cliff
 
 parser = Parser([
     Argument("input"),
-    Argument(["--count", "-c"]; default = "1"),
+    Argument(["--count", "-c"]; default = ["1"]),
     Argument("--tag"; repeat = true),
-    Argument("--mode"; choices = ["fast", "slow"], default = "fast"),
+    Argument("--mode"; choices = ["fast", "slow"], default = ["fast"]),
     Argument("--verbose"; flag = true)
 ], [
     Command("run", [Argument("task")], [
-        Command("fast", [Argument("--threads"; default = "4")])
+        Command("fast", [Argument("--threads"; default = ["4"])])
     ])
 ])
 
@@ -111,7 +113,7 @@ println(args["--tag", Vector{String}])      # ["demo", "release"]
 
 #### Flags and counts
 
-Flags default to the string "0" and record "1" for every occurrence. `args["--verbose", Bool]` therefore returns `false` unless the flag appears on the command line, `args["--verbose"]` yields "0" or "1", and `args["--verbose", Int]` reports the number of times the flag was provided. When a flag is absent `args["--verbose", Vector{T}]` returns an empty vector, making it easy to detect whether users opted in.
+Flags default to the string "0" and record "1" for every occurrence. `args["--verbose", Bool]` therefore returns `false` unless the flag appears on the command line, `args["--verbose"]` yields "0" or "1", and `args["--verbose", Int]` reports the number of times the flag was provided. When a flag is absent `args["--verbose", Vector{T}]` returns an empty vector, making it easy to detect whether users opted in while leaving scalar lookups to map the empty list to "0".
 
 ### Early stopping and error handling
 
