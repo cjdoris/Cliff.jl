@@ -14,10 +14,8 @@ using Cliff
     @test flag.flag
     @test !flag.has_default
     @test flag.default == String[]
-    @test flag.flag_value == "1"
 
     @test_throws ArgumentError Argument("--answer"; flag = true, default = "0")
-    @test_throws ArgumentError Argument("value"; flag_value = "on")
 
     repeat_flag = Argument("--verbose"; flag = true, repeat = true)
     @test repeat_flag.min_occurs == 0
@@ -76,13 +74,13 @@ using Cliff
     @test custom_help.help == "Select the path."
     @test custom_help.help_val == "FILE"
 
-    valid_flag_choices = Argument("--toggle"; flag = true, choices = ["0", "1"])
-    @test valid_flag_choices.flag
-    @test valid_flag_choices.flag_value == "1"
+    @test_throws ArgumentError Argument("--toggle"; flag = true, choices = [""])
     @test_throws ArgumentError Argument("--broken"; flag = true, choices = ["1"])
     @test_throws ArgumentError Argument("--badregex"; flag = true, regex = r"^1$")
 
-    @test_throws ArgumentError Argument("value"; required = false)
+    optional_positional = Argument("value"; required = false)
+    @test optional_positional.min_occurs == 0
+    @test !optional_positional.required
     @test_throws ArgumentError Argument("mode"; choices = String[])
     @test_throws ArgumentError Argument("mode"; choices = ["fast"], default = "slow")
     @test_throws ArgumentError Argument(["-help"])
@@ -338,7 +336,7 @@ end
     args = parser(["--count", "5", "--dry-run"]; error_mode = :throw)
     @test args["--count", Int] == 5
     @test args["--dry-run", Bool]
-    @test args["--dry-run", Vector{String}] == ["1"]
+    @test args["--dry-run", Vector{String}] == [""]
     @test args["--dry-run", Int] == 1
 
     args2 = parser(["-c", "7"]; error_mode = :throw)
@@ -346,12 +344,12 @@ end
     @test !args2["--dry-run", Bool]
     @test args2["--dry-run", Vector{String}] == String[]
     @test args2["--dry-run", Int] == 0
-    @test args2["--dry-run"] == "0"
+    @test_throws ArgumentError args2["--dry-run"]
 
     args3 = parser(["--count=8", "--dry-run"]; error_mode = :throw)
     @test args3["--count", Int] == 8
     @test args3["--dry-run", Bool]
-    @test args3["--dry-run", Vector{String}] == ["1"]
+    @test args3["--dry-run", Vector{String}] == [""]
 
     args4 = parser(["-c=9"]; error_mode = :throw)
     @test args4["--count"] == "=9"
@@ -370,17 +368,17 @@ end
 
     auto = Parser([Argument("--toggle"; flag = true)])
     auto_default = auto(String[]; error_mode = :throw)
-    @test auto_default["--toggle"] == "0"
+    @test_throws ArgumentError auto_default["--toggle"]
     @test !auto_default["--toggle", Bool]
     @test auto_default["--toggle", Vector{String}] == String[]
     toggled = auto(["--toggle"]; error_mode = :throw)
-    @test toggled["--toggle"] == "1"
+    @test toggled["--toggle"] == ""
     @test toggled["--toggle", Bool]
-    @test toggled["--toggle", Vector{String}] == ["1"]
+    @test toggled["--toggle", Vector{String}] == [""]
 
     implicit = Parser([Argument("--name"; default = String[])])
     implicit_args = implicit(String[]; error_mode = :throw)
-    @test implicit_args["--name"] == ""
+    @test_throws ArgumentError implicit_args["--name"]
     @test implicit_args["--name", Vector{String}] == String[]
     @test implicit_args["--name", Union{String, Nothing}] === nothing
     @test implicit_args["--name", String, -] === nothing
@@ -394,7 +392,7 @@ end
     repeat_parser = Parser([Argument(["--verbose", "-v"]; flag = true, repeat = true)])
     repeat_args = repeat_parser(["-vvv", "--verbose"]; error_mode = :throw)
     @test repeat_args["--verbose", Int] == 4
-    @test repeat_args["--verbose", Vector{String}] == ["1", "1", "1", "1"]
+    @test repeat_args["--verbose", Vector{String}] == ["", "", "", ""]
 end
 
 @testset "Stop arguments" begin
@@ -445,7 +443,7 @@ end
     flag_parser = Parser([Argument(["--loud", "-✓"]; flag = true, repeat = true)])
     loud = flag_parser(["-✓✓"]; error_mode = :throw)
     @test loud["--loud", Int] == 2
-    @test loud["--loud", Vector{String}] == ["1", "1"]
+    @test loud["--loud", Vector{String}] == ["", ""]
 end
 
 @testset "Typed retrieval" begin
@@ -483,7 +481,7 @@ end
     @test args["--preset", Vector{Int}] == [1, 2, 3]
     @test args["--ratio", Union{String, Nothing}] == "2.5"
     @test args["--ratio", Float64, -] == 2.5
-    @test args["--flag", -] == "1"
+    @test args["--flag", -] == ""
     @test args["--flag", Bool, -] == true
     @test_throws ArgumentError args["--ints", Union{String, Nothing}]
 

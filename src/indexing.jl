@@ -11,10 +11,8 @@ function _argument_values(level::LevelResult, idx::Int)
     stored = level.values[idx]
     if !isempty(stored)
         return copy(stored)
-    elseif argument.has_default
+    elseif !argument.required
         return copy(argument.default)
-    elseif argument.flag
-        return String[]
     else
         return String[]
     end
@@ -53,15 +51,10 @@ function _single_string(level::LevelResult, idx::Int, values::Vector{String})
     if argument.max_occurs != 1
         throw(ArgumentError("Argument $(first(argument.names)) accepts multiple values; use args[name, Vector] instead"))
     end
-    if !isempty(values)
-        return values[1]
-    elseif argument.has_default && !isempty(argument.default)
-        return argument.default[1]
-    elseif argument.flag
-        return "0"
-    else
-        return ""
+    if isempty(values)
+        throw(ArgumentError("Argument $(first(argument.names)) was not provided"))
     end
+    return values[1]
 end
 
 function _convert_argument(::Type{String}, level::LevelResult, idx::Int, values::Vector{String})
@@ -76,7 +69,22 @@ function _convert_argument(::Type{Union{T, Nothing}}, level::LevelResult, idx::I
     if isempty(values)
         return nothing
     end
+    if argument.flag && T === Bool
+        return true
+    end
     return _convert_value(T, values[1])
+end
+
+function _convert_argument(::Type{Bool}, level::LevelResult, idx::Int, values::Vector{String})
+    argument = level.arguments[idx]
+    if argument.flag
+        if argument.max_occurs != 1
+            throw(ArgumentError("Argument $(first(argument.names)) accepts multiple values; use args[name, Vector] instead"))
+        end
+        return !isempty(values)
+    end
+    string_value = _single_string(level, idx, values)
+    return _convert_value(Bool, string_value)
 end
 
 function _convert_argument(::Type{Int}, level::LevelResult, idx::Int, values::Vector{String})
@@ -88,7 +96,11 @@ function _convert_argument(::Type{Int}, level::LevelResult, idx::Int, values::Ve
     return _convert_value(Int, string_value)
 end
 
-function _convert_argument(::Type{Vector{T}}, ::LevelResult, ::Int, values::Vector{String}) where {T}
+function _convert_argument(::Type{Vector{T}}, level::LevelResult, idx::Int, values::Vector{String}) where {T}
+    argument = level.arguments[idx]
+    if argument.flag && T === Bool
+        return fill(true, length(values))
+    end
     converted = Vector{T}(undef, length(values))
     for (i, value) in enumerate(values)
         converted[i] = _convert_value(T, value)
@@ -106,8 +118,8 @@ end
 
 Retrieve values from a `Parsed` object. Supports optional `depth` arguments to
 disambiguate commands and typed lookups such as `args[name, Int]` or
-`args[name, Vector{T}]`. Flags return "0"/"1" strings, while integer lookups
-yield occurrence counts.
+`args[name, Vector{T}]`. Flags store empty strings for each occurrence, while
+integer lookups yield occurrence counts.
 """
 Base.getindex(args::Parsed, name::String) = args[name, String]
 

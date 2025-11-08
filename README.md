@@ -60,11 +60,12 @@ This allows you to keep your parser definitions declarative while still retrievi
 
 Cliff can validate incoming values without custom code:
 
-- `choices = [...]` forces inputs to match a curated allowlist. Defaults must appear in the same list, and flags require both `"0"` and `"1"` when choices are provided.
+- `choices = [...]` forces inputs to match a curated allowlist. Defaults must appear in the same list.
 - `regex = r"..."` requires each value to match the supplied pattern.
-- Use `required = false` to assert that an argument stays optional; Cliff raises an error if no sensible default exists.
+- Use `required = false` to force an argument to remain optional, even for positionals. Optional arguments default to an empty va
+lue list unless you provide your own.
 
-Both options apply to positional arguments, options, and flags, and they work alongside repetition controls. When validation fails Cliff raises a `ParseError` with kind `:invalid_value` so you can render a friendly message or surface it to the user as-is.
+Both options apply to positional arguments and options, and they work alongside repetition controls. When validation fails Cliff raises a `ParseError` with kind `:invalid_value` so you can render a friendly message or surface it to the user as-is.
 
 ```julia
 Argument("mode"; choices = ["fast", "slow"], default = "fast")
@@ -106,7 +107,7 @@ println(args["--tag", Vector{String}])      # ["demo", "release"]
 
 #### Flags and counts
 
-Flags default to the string "0" and record "1" for every occurrence. `args["--verbose", Bool]` therefore returns `false` unless the flag appears on the command line, `args["--verbose"]` yields "0" or "1", and `args["--verbose", Int]` reports the number of times the flag was provided. When a flag is absent `args["--verbose", Vector{T}]` returns an empty vector, making it easy to detect whether users opted in.
+Flags default to an empty value list and record an empty string `""` for every occurrence. `args["--verbose", Bool]` therefore returns `false` unless the flag appears on the command line, `args["--verbose"]` yields `""` when present (and throws if omitted), and `args["--verbose", Int]` reports the number of times the flag was provided. When a flag is absent `args["--verbose", Vector{T}]` returns an empty vector, otherwise it contains an empty string for each occurrence, making it easy to detect whether users opted in.
 
 ### Early stopping and error handling
 

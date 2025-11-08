@@ -335,7 +335,7 @@ after parsing completes (unless halted by a stop argument).
 function _ensure_required(trace::_ParseTrace, level::LevelResult, command_path::Vector{String}, levels::Vector{LevelResult})
     for (idx, argument) in enumerate(level.arguments)
         provided = level.counts[idx]
-        default_count = (argument.has_default && provided == 0) ? length(argument.default) : 0
+        default_count = (!argument.required && provided == 0) ? length(argument.default) : 0
         total = provided + default_count
         if total < argument.min_occurs
             used_name = first(argument.names)
@@ -451,7 +451,7 @@ end
 """
     _set_flag!(level, idx, command_path, levels)
 
-Specialised wrapper around `_set_value!` for flags. Stores the string "1" and
+Specialised wrapper around `_set_value!` for flags. Stores an empty string and
 returns whether parsing should stop.
 """
 function _set_flag!(
@@ -464,8 +464,7 @@ function _set_flag!(
         token_range::Tuple{Int, Int},
         alias::Union{Nothing, String},
     )
-    argument = level.arguments[idx]
-    return _set_value!(trace, level, idx, argument.flag_value, command_path, levels, argv_index, token_range, alias)
+    return _set_value!(trace, level, idx, "", command_path, levels, argv_index, token_range, alias)
 end
 
 """
@@ -479,7 +478,7 @@ function _has_outstanding_required(level::LevelResult)
         argument = level.arguments[idx]
         provided = level.counts[idx]
         if provided < argument.min_occurs
-            default_count = (argument.has_default && provided == 0) ? length(argument.default) : 0
+            default_count = (!argument.required && provided == 0) ? length(argument.default) : 0
             if provided + default_count < argument.min_occurs
                 return true
             end
