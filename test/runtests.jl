@@ -382,6 +382,9 @@ end
     implicit_args = implicit(String[]; error_mode = :throw)
     @test implicit_args["--name"] == ""
     @test implicit_args["--name", Vector{String}] == String[]
+    @test implicit_args["--name", Union{String, Nothing}] === nothing
+    @test implicit_args["--name", String, -] === nothing
+    @test implicit_args["--name", -] === nothing
     @test implicit_args.success
     @test implicit_args.complete
 
@@ -478,6 +481,11 @@ end
     @test args["--floats", Vector{Float64}] == [0.5, 1.5]
     @test args["--floats", Float64, +] == [0.5, 1.5]
     @test args["--preset", Vector{Int}] == [1, 2, 3]
+    @test args["--ratio", Union{String, Nothing}] == "2.5"
+    @test args["--ratio", Float64, -] == 2.5
+    @test args["--flag", -] == "1"
+    @test args["--flag", Bool, -] == true
+    @test_throws ArgumentError args["--ints", Union{String, Nothing}]
 
     defaults = parser(["value"]; error_mode = :throw)
     @test defaults["--count", Int] == 42
@@ -487,6 +495,12 @@ end
     @test defaults["--ints", Vector{Int}] == Int[]
     @test defaults["--floats", Vector{Float64}] == Float64[]
     @test defaults["--preset", Vector{Int}] == [1, 2, 3]
+    @test defaults["--ratio", Union{String, Nothing}] == "3.14"
+    @test defaults["--count", Int, -] == 42
+    @test defaults["--flag", Union{String, Nothing}] === nothing
+    @test defaults["--flag", Bool, -] === nothing
+    @test defaults["--flag", -] === nothing
+    @test_throws ArgumentError defaults["--floats", Float64, -]
 end
 
 @testset "Repeatable arguments" begin
