@@ -1,23 +1,6 @@
 # This file provides indexing and retrieval utilities for Parsed results.
 
 """
-    _find_level_index(args, name)
-
-Search all parser levels (starting from the innermost) for an argument and
-return the level plus index when present. Used by the indexing API.
-"""
-function _find_level_index(args::Parsed, name::String)
-    for idx in Iterators.reverse(eachindex(args.levels))
-        level = args.levels[idx]
-        position = _lookup_argument(level, name)
-        if position !== nothing
-            return level, position
-        end
-    end
-    return nothing, 0
-end
-
-"""
     _argument_values(level, idx)
 
 Return all recorded (or default) values for the argument at `idx`. Flags return
@@ -38,19 +21,40 @@ function _argument_values(level::LevelResult, idx::Int)
 end
 
 """
-    _single_value(level, idx)
+    _resolve_level(args, depth)
 
-Fetch a single value for the argument at `idx`, applying default handling.
-Raises when the argument accepts multiple values.
+Validate and return the `LevelResult` for `depth`, using zero-based indexing to
+mirror the public API. Raises an `ArgumentError` when the depth is invalid.
 """
-function _single_value(level::LevelResult, idx::Int)
+function _resolve_level(args::Parsed, depth::Integer)
+    if depth < 0 || depth >= length(args.levels)
+        throw(ArgumentError("Invalid depth: $(depth)"))
+    end
+    return args.levels[depth + 1]
+end
+
+"""
+    _resolve_depth(args, name)
+
+Locate the depth where `name` is defined, searching from the innermost level to
+the outermost. Throws `KeyError` if the argument is unknown.
+"""
+function _resolve_depth(args::Parsed, name::String)
+    for (depth, level) in Iterators.reverse(enumerate(args.levels))
+        if _lookup_argument(level, name) !== nothing
+            return depth - 1
+        end
+    end
+    throw(KeyError(name))
+end
+
+function _single_string(level::LevelResult, idx::Int, values::Vector{String})
     argument = level.arguments[idx]
     if argument.max_occurs != 1
         throw(ArgumentError("Argument $(first(argument.names)) accepts multiple values; use args[name, Vector] instead"))
     end
-    stored = level.values[idx]
-    if !isempty(stored)
-        return stored[1]
+    if !isempty(values)
+        return values[1]
     elseif argument.has_default && !isempty(argument.default)
         return argument.default[1]
     elseif argument.flag
@@ -60,19 +64,41 @@ function _single_value(level::LevelResult, idx::Int)
     end
 end
 
-function _optional_single_value(level::LevelResult, idx::Int)
+function _convert_argument(::Type{String}, level::LevelResult, idx::Int, values::Vector{String})
+    return _single_string(level, idx, values)
+end
+
+function _convert_argument(::Type{Union{T, Nothing}}, level::LevelResult, idx::Int, values::Vector{String}) where {T}
     argument = level.arguments[idx]
     if argument.max_occurs != 1
         throw(ArgumentError("Argument $(first(argument.names)) accepts multiple values; use args[name, Vector] instead"))
     end
-    stored = level.values[idx]
-    if !isempty(stored)
-        return stored[1]
-    elseif argument.has_default && !isempty(argument.default)
-        return argument.default[1]
-    else
+    if isempty(values)
         return nothing
     end
+    return _convert_value(T, values[1])
+end
+
+function _convert_argument(::Type{Int}, level::LevelResult, idx::Int, values::Vector{String})
+    argument = level.arguments[idx]
+    if argument.flag
+        return level.counts[idx]
+    end
+    string_value = _single_string(level, idx, values)
+    return _convert_value(Int, string_value)
+end
+
+function _convert_argument(::Type{Vector{T}}, ::LevelResult, ::Int, values::Vector{String}) where {T}
+    converted = Vector{T}(undef, length(values))
+    for (i, value) in enumerate(values)
+        converted[i] = _convert_value(T, value)
+    end
+    return converted
+end
+
+function _convert_argument(::Type{T}, level::LevelResult, idx::Int, values::Vector{String}) where {T}
+    string_value = _single_string(level, idx, values)
+    return _convert_value(T, string_value)
 end
 
 """
@@ -83,28 +109,9 @@ disambiguate commands and typed lookups such as `args[name, Int]` or
 `args[name, Vector{T}]`. Flags return "0"/"1" strings, while integer lookups
 yield occurrence counts.
 """
-function Base.getindex(args::Parsed, name::String)
-    for idx in Iterators.reverse(eachindex(args.levels))
-        level = args.levels[idx]
-        position = _lookup_argument(level, name)
-        if position !== nothing
-            return _single_value(level, position)
-        end
-    end
-    throw(KeyError(name))
-end
+Base.getindex(args::Parsed, name::String) = args[name, String]
 
-function Base.getindex(args::Parsed, name::String, depth::Integer)
-    if depth < 0 || depth + 1 > length(args.levels)
-        throw(ArgumentError("Invalid depth: $(depth)"))
-    end
-    level = args.levels[depth + 1]
-    idx = _lookup_argument(level, name)
-    if idx === nothing
-        throw(KeyError(name))
-    end
-    return _single_value(level, idx)
-end
+Base.getindex(args::Parsed, name::String, depth::Integer) = args[name, depth, String]
 
 """
     _convert_value(T, value)
@@ -140,101 +147,18 @@ function _convert_value(T::Type, value::String)
 end
 
 function Base.getindex(args::Parsed, name::String, ::Type{T}) where {T}
-    value = args[name]
-    return _convert_value(T, value)
-end
-
-function Base.getindex(args::Parsed, name::String, ::Type{Union{T, Nothing}}) where {T}
-    level, idx = _find_level_index(args, name)
-    if level === nothing
-        throw(KeyError(name))
-    end
-    value = _optional_single_value(level, idx)
-    if value === nothing
-        return nothing
-    end
-    return _convert_value(T, value)
-end
-
-function Base.getindex(args::Parsed, name::String, ::Type{Int})
-    level, idx = _find_level_index(args, name)
-    if level === nothing
-        throw(KeyError(name))
-    end
-    argument = level.arguments[idx]
-    if argument.flag
-        return level.counts[idx]
-    end
-    value = _single_value(level, idx)
-    return _convert_value(Int, value)
+    depth = _resolve_depth(args, name)
+    return args[name, depth, T]
 end
 
 function Base.getindex(args::Parsed, name::String, depth::Integer, ::Type{T}) where {T}
-    value = args[name, depth]
-    return _convert_value(T, value)
-end
-
-function Base.getindex(args::Parsed, name::String, depth::Integer, ::Type{Union{T, Nothing}}) where {T}
-    if depth < 0 || depth + 1 > length(args.levels)
-        throw(ArgumentError("Invalid depth: $(depth)"))
-    end
-    level = args.levels[depth + 1]
-    idx = _lookup_argument(level, name)
-    if idx === nothing
-        throw(KeyError(name))
-    end
-    value = _optional_single_value(level, idx)
-    if value === nothing
-        return nothing
-    end
-    return _convert_value(T, value)
-end
-
-function Base.getindex(args::Parsed, name::String, depth::Integer, ::Type{Int})
-    if depth < 0 || depth + 1 > length(args.levels)
-        throw(ArgumentError("Invalid depth: $(depth)"))
-    end
-    level = args.levels[depth + 1]
-    idx = _lookup_argument(level, name)
-    if idx === nothing
-        throw(KeyError(name))
-    end
-    argument = level.arguments[idx]
-    if argument.flag
-        return level.counts[idx]
-    end
-    value = _single_value(level, idx)
-    return _convert_value(Int, value)
-end
-
-function Base.getindex(args::Parsed, name::String, ::Type{Vector{T}}) where {T}
-    level, idx = _find_level_index(args, name)
-    if level === nothing
-        throw(KeyError(name))
-    end
-    values = _argument_values(level, idx)
-    converted = Vector{T}(undef, length(values))
-    for (i, value) in enumerate(values)
-        converted[i] = _convert_value(T, value)
-    end
-    return converted
-end
-
-function Base.getindex(args::Parsed, name::String, depth::Integer, ::Type{Vector{T}}) where {T}
-    if depth < 0 || depth + 1 > length(args.levels)
-        throw(ArgumentError("Invalid depth: $(depth)"))
-    end
-    level = args.levels[depth + 1]
+    level = _resolve_level(args, depth)
     idx = _lookup_argument(level, name)
     if idx === nothing
         throw(KeyError(name))
     end
     values = _argument_values(level, idx)
-    converted = Vector{T}(undef, length(values))
-    for (i, value) in enumerate(values)
-        converted[i] = _convert_value(T, value)
-    end
-    return converted
+    return _convert_argument(T, level, idx, values)
 end
 
 function Base.getindex(args::Parsed, name::String, ::typeof(+))
