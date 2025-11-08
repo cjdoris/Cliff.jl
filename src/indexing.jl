@@ -48,8 +48,8 @@ function _single_string(level::LevelResult, idx::Int, values::Vector{String})
     end
     if !isempty(values)
         return values[1]
-    elseif argument.has_default && !isempty(argument.default)
-        return argument.default[1]
+    elseif argument.has_default && argument.default_occurs > 0
+        return argument.default
     elseif argument.flag
         return "0"
     else
@@ -67,8 +67,8 @@ function _convert_argument(::Type{Union{T, Nothing}}, level::LevelResult, idx::I
         throw(ArgumentError("Argument $(first(argument.names)) accepts multiple values; use args[name, Vector] instead"))
     end
     if isempty(values)
-        if argument.has_default && !isempty(argument.default)
-            return _convert_value(T, argument.default[1])
+        if argument.has_default && argument.default_occurs > 0
+            return _convert_value(T, argument.default)
         elseif argument.flag
             return _convert_value(T, "0")
         else

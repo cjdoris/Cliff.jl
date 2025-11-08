@@ -335,7 +335,7 @@ after parsing completes (unless halted by a stop argument).
 function _ensure_required(trace::_ParseTrace, level::LevelResult, command_path::Vector{String}, levels::Vector{LevelResult})
     for (idx, argument) in enumerate(level.arguments)
         provided = level.counts[idx]
-        default_count = (argument.has_default && provided == 0) ? length(argument.default) : 0
+        default_count = (argument.has_default && provided == 0) ? argument.default_occurs : 0
         total = provided + default_count
         if total < argument.min_occurs
             used_name = first(argument.names)
@@ -479,7 +479,7 @@ function _has_outstanding_required(level::LevelResult)
         argument = level.arguments[idx]
         provided = level.counts[idx]
         if provided < argument.min_occurs
-            default_count = (argument.has_default && provided == 0) ? length(argument.default) : 0
+            default_count = (argument.has_default && provided == 0) ? argument.default_occurs : 0
             if provided + default_count < argument.min_occurs
                 return true
             end

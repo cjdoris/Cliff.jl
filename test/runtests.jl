@@ -5,7 +5,8 @@ using Cliff
     arg = Argument(["--name", "-n"]; default = "guest")
     @test !arg.flag
     @test arg.names == ["--name", "-n"]
-    @test arg.default == ["guest"]
+    @test arg.default == "guest"
+    @test arg.default_occurs == 1
     @test arg.has_default
     @test arg.min_occurs == 0
     @test !arg.positional
@@ -13,7 +14,8 @@ using Cliff
     flag = Argument("--verbose"; flag = true)
     @test flag.flag
     @test !flag.has_default
-    @test flag.default == String[]
+    @test flag.default == ""
+    @test flag.default_occurs == 0
     @test flag.flag_value == "1"
 
     @test_throws ArgumentError Argument("--answer"; flag = true, default = "0")
@@ -60,10 +62,12 @@ using Cliff
     @test auto_help_arg.stop
 
     numeric_default = Argument("--count"; default = 5)
-    @test numeric_default.default == ["5"]
+    @test numeric_default.default == "5"
+    @test numeric_default.default_occurs == 1
 
     vector_default = Argument("--numbers"; repeat = true, default = [1, "two", 3.5])
-    @test vector_default.default == ["1", "two", "3.5"]
+    @test vector_default.default == "1"
+    @test vector_default.default_occurs == 3
 
     positional_help = Argument("input")
     @test positional_help.help == ""
