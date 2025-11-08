@@ -52,6 +52,7 @@ Values are stored as strings but can be converted when accessed from a `Parsed` 
 - `args["name", Bool]` recognises `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off` (case insensitive).
 - `args["name", T]` uses `Base.parse(T, value)` for any type `T` with a parsing method, such as `Int`, `Float64`, or `UInt`.
 - `args["name", Vector{T}]` (or the shorthand `args["name", T, +]`) converts each provided value for repeatable arguments or flags.
+- `args["name", Union{String, Nothing}]` returns `nothing` when the argument was optional and not supplied. Use `args["name", T, -]` (or `args["name", -]` for strings) as a shorthand for optional typed lookups.
 
 This allows you to keep your parser definitions declarative while still retrieving strongly typed values at the call site. The returned `Parsed` object also exposes `success`, `complete`, `stopped`, `stop_argument`, and an optional `error::ParseError` for full diagnostics.
 

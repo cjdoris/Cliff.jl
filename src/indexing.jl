@@ -60,6 +60,21 @@ function _single_value(level::LevelResult, idx::Int)
     end
 end
 
+function _optional_single_value(level::LevelResult, idx::Int)
+    argument = level.arguments[idx]
+    if argument.max_occurs != 1
+        throw(ArgumentError("Argument $(first(argument.names)) accepts multiple values; use args[name, Vector] instead"))
+    end
+    stored = level.values[idx]
+    if !isempty(stored)
+        return stored[1]
+    elseif argument.has_default && !isempty(argument.default)
+        return argument.default[1]
+    else
+        return nothing
+    end
+end
+
 """
     Base.getindex(args::Parsed, name)
 
@@ -129,6 +144,18 @@ function Base.getindex(args::Parsed, name::String, ::Type{T}) where {T}
     return _convert_value(T, value)
 end
 
+function Base.getindex(args::Parsed, name::String, ::Type{Union{T, Nothing}}) where {T}
+    level, idx = _find_level_index(args, name)
+    if level === nothing
+        throw(KeyError(name))
+    end
+    value = _optional_single_value(level, idx)
+    if value === nothing
+        return nothing
+    end
+    return _convert_value(T, value)
+end
+
 function Base.getindex(args::Parsed, name::String, ::Type{Int})
     level, idx = _find_level_index(args, name)
     if level === nothing
@@ -144,6 +171,22 @@ end
 
 function Base.getindex(args::Parsed, name::String, depth::Integer, ::Type{T}) where {T}
     value = args[name, depth]
+    return _convert_value(T, value)
+end
+
+function Base.getindex(args::Parsed, name::String, depth::Integer, ::Type{Union{T, Nothing}}) where {T}
+    if depth < 0 || depth + 1 > length(args.levels)
+        throw(ArgumentError("Invalid depth: $(depth)"))
+    end
+    level = args.levels[depth + 1]
+    idx = _lookup_argument(level, name)
+    if idx === nothing
+        throw(KeyError(name))
+    end
+    value = _optional_single_value(level, idx)
+    if value === nothing
+        return nothing
+    end
     return _convert_value(T, value)
 end
 
@@ -208,5 +251,21 @@ end
 
 function Base.getindex(args::Parsed, name::String, depth::Integer, ::Type{T}, ::typeof(+)) where {T}
     return args[name, depth, Vector{T}]
+end
+
+function Base.getindex(args::Parsed, name::String, ::typeof(-))
+    return args[name, Union{String, Nothing}]
+end
+
+function Base.getindex(args::Parsed, name::String, depth::Integer, ::typeof(-))
+    return args[name, depth, Union{String, Nothing}]
+end
+
+function Base.getindex(args::Parsed, name::String, ::Type{T}, ::typeof(-)) where {T}
+    return args[name, Union{T, Nothing}]
+end
+
+function Base.getindex(args::Parsed, name::String, depth::Integer, ::Type{T}, ::typeof(-)) where {T}
+    return args[name, depth, Union{T, Nothing}]
 end
 
