@@ -545,10 +545,14 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
     computed_flag_value = flag ? "1" : ""
     repeat_implies_optional = _repeat_allows_zero_min(repeat, min_repeat)
     has_sensible_default = has_default || flag || repeat_implies_optional || stop
-    if required === false && !has_sensible_default
+    if positional && required === false && !has_sensible_default
         throw(ArgumentError("required=false is only supported when the argument is optional by default"))
     end
-    required_flag = required === nothing ? !has_sensible_default : required
+    if required === nothing
+        required_flag = positional ? !has_sensible_default : false
+    else
+        required_flag = required
+    end
     min_occurs, max_occurs = _determine_occurrences(required_flag, repeat, min_repeat, max_repeat)
     if has_default && max_occurs != _UNBOUNDED && length(default_values) > max_occurs
         throw(ArgumentError("Default value count exceeds maximum occurrences"))

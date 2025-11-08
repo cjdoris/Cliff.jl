@@ -129,7 +129,7 @@ end
     @test args["input", 0, String] == "input.txt"
     @test args["input", Vector{String}] == ["input.txt"]
     @test args["--threads", Vector{String}] == ["4"]
-    @test args["output", Vector{String}] == ["out.txt"]
+    @test args["output", Vector{String}] == String[]
     @test_throws KeyError args["--missing"]
     @test_throws ArgumentError args["--threads", 5]
     @test_throws KeyError args["--threads", 0]
@@ -380,7 +380,7 @@ end
 
     implicit = Parser([Argument("--name"; default = String[])])
     implicit_args = implicit(String[]; error_mode = :throw)
-    @test implicit_args["--name"] == ""
+    @test_throws ArgumentError implicit_args["--name"]
     @test implicit_args["--name", Vector{String}] == String[]
     @test implicit_args["--name", Union{String, Nothing}] === nothing
     @test implicit_args["--name", String, -] === nothing
@@ -480,7 +480,7 @@ end
     @test args["--ints", Int, +] == [1, 2]
     @test args["--floats", Vector{Float64}] == [0.5, 1.5]
     @test args["--floats", Float64, +] == [0.5, 1.5]
-    @test args["--preset", Vector{Int}] == [1, 2, 3]
+    @test args["--preset", Vector{Int}] == Int[]
     @test args["--ratio", Union{String, Nothing}] == "2.5"
     @test args["--ratio", Float64, -] == 2.5
     @test args["--flag", -] == "1"
@@ -494,13 +494,32 @@ end
     @test defaults["--flag", Vector{Bool}] == Bool[]
     @test defaults["--ints", Vector{Int}] == Int[]
     @test defaults["--floats", Vector{Float64}] == Float64[]
-    @test defaults["--preset", Vector{Int}] == [1, 2, 3]
+    @test defaults["--preset", Vector{Int}] == Int[]
     @test defaults["--ratio", Union{String, Nothing}] == "3.14"
     @test defaults["--count", Int, -] == 42
-    @test defaults["--flag", Union{String, Nothing}] === nothing
-    @test defaults["--flag", Bool, -] === nothing
-    @test defaults["--flag", -] === nothing
+    @test defaults["--flag", Union{String, Nothing}] == "0"
+    @test defaults["--flag", Bool, -] == false
+    @test defaults["--flag", -] == "0"
     @test_throws ArgumentError defaults["--floats", Float64, -]
+end
+
+@testset "Optional option defaults" begin
+    parser = Parser([
+        Argument("--opt"),
+        Argument("--flag"; flag = true)
+    ])
+
+    args = parser(String[]; error_mode = :throw)
+    @test args["--opt", Vector{String}] == String[]
+    @test !args["--flag", Bool]
+    @test args["--flag", Vector{String}] == String[]
+    @test args["--flag", Union{String, Nothing}] == "0"
+    @test args["--flag", Bool, -] == false
+    @test args["--flag", -] == "0"
+    @test args["--opt", Union{String, Nothing}] === nothing
+    @test args["--opt", -] === nothing
+    @test_throws ArgumentError args["--opt"]
+    @test_throws ArgumentError args["--opt", Int]
 end
 
 @testset "Repeatable arguments" begin

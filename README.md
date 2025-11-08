@@ -51,8 +51,10 @@ Values are stored as strings but can be converted when accessed from a `Parsed` 
 - `args["name"]` or `args["name", String]` returns the raw string value.
 - `args["name", Bool]` recognises `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off` (case insensitive).
 - `args["name", T]` uses `Base.parse(T, value)` for any type `T` with a parsing method, such as `Int`, `Float64`, or `UInt`.
-- `args["name", Vector{T}]` (or the shorthand `args["name", T, +]`) converts each provided value for repeatable arguments or flags.
-- `args["name", Union{String, Nothing}]` returns `nothing` when the argument was optional and not supplied. Use `args["name", T, -]` (or `args["name", -]` for strings) as a shorthand for optional typed lookups.
+- `args["name", Vector{T}]` (or the shorthand `args["name", T, +]`) converts each value provided on the command line—defaults are not injected.
+- `args["name", Union{String, Nothing}]` returns `nothing` when the argument was optional, not supplied, and has no default. Use `args["name", T, -]` (or `args["name", -]` for strings) as a shorthand for optional typed lookups that honour defaults (including the implicit `"0"` for flags).
+
+Single-valued lookups such as `args["--mode"]` raise an `ArgumentError` if the option was omitted and has no default. Pair them with the optional retrieval form when you need to distinguish between “missing” and “present with a default”.
 
 This allows you to keep your parser definitions declarative while still retrieving strongly typed values at the call site. The returned `Parsed` object also exposes `success`, `complete`, `stopped`, `stop_argument`, and an optional `error::ParseError` for full diagnostics.
 
@@ -62,7 +64,7 @@ Cliff can validate incoming values without custom code:
 
 - `choices = [...]` forces inputs to match a curated allowlist. Defaults must appear in the same list, and flags require both `"0"` and `"1"` when choices are provided.
 - `regex = r"..."` requires each value to match the supplied pattern.
-- Use `required = false` to assert that an argument stays optional; Cliff raises an error if no sensible default exists.
+- Positional arguments remain required unless a default is present or you explicitly relax them with `required = false`.
 
 Both options apply to positional arguments, options, and flags, and they work alongside repetition controls. When validation fails Cliff raises a `ParseError` with kind `:invalid_value` so you can render a friendly message or surface it to the user as-is.
 
@@ -90,6 +92,9 @@ parser = Parser([
         Command("fast", [Argument("--threads"; default = "4")])
     ])
 ])
+
+# Non-positional arguments are optional unless you set `required = true` or
+# supply repetition bounds that demand at least one occurrence.
 
 args = parser(["input.txt", "--tag", "demo", "--tag", "release", "run", "task-name", "fast", "--threads", "8"])
 
