@@ -60,12 +60,12 @@ This allows you to keep your parser definitions declarative while still retrievi
 
 Cliff can validate incoming values without custom code:
 
-- `choices = [...]` forces inputs to match a curated allowlist. Defaults must appear in the same list, and flags require `""` when choices are provided.
+- `choices = [...]` forces inputs to match a curated allowlist. Defaults must appear in the same list.
 - `regex = r"..."` requires each value to match the supplied pattern.
 - Use `required = false` to force an argument to remain optional, even for positionals. Optional arguments default to an empty va
 lue list unless you provide your own.
 
-Both options apply to positional arguments, options, and flags, and they work alongside repetition controls. When validation fails Cliff raises a `ParseError` with kind `:invalid_value` so you can render a friendly message or surface it to the user as-is.
+Both options apply to positional arguments and options, and they work alongside repetition controls. When validation fails Cliff raises a `ParseError` with kind `:invalid_value` so you can render a friendly message or surface it to the user as-is.
 
 ```julia
 Argument("mode"; choices = ["fast", "slow"], default = "fast")

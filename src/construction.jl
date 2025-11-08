@@ -523,6 +523,12 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
     if flag && default !== nothing
         throw(ArgumentError("Flags do not support default values"))
     end
+    if flag && choices !== nothing
+        throw(ArgumentError("Flags do not support choices"))
+    end
+    if flag && regex !== nothing
+        throw(ArgumentError("Flags do not support regex validation"))
+    end
     explicit_default = !flag && default !== nothing
     default_values = String[]
     if explicit_default
@@ -569,19 +575,11 @@ function Argument(names; required::Union{Bool, Nothing} = nothing, default = not
                 throw(ArgumentError("Default value $(repr(value)) is not permitted by choices"))
             end
         end
-        if flag && !("" in choice_values)
-            throw(ArgumentError("Flags require choices to include the empty string"))
-        end
     end
     if has_regex
         for value in default_values
             if match(regex_obj, value) === nothing
                 throw(ArgumentError("Default value $(repr(value)) does not match regex"))
-            end
-        end
-        if flag
-            if match(regex_obj, "") === nothing
-                throw(ArgumentError("Flags require regex patterns that match the empty string"))
             end
         end
     end

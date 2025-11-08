@@ -74,8 +74,7 @@ using Cliff
     @test custom_help.help == "Select the path."
     @test custom_help.help_val == "FILE"
 
-    valid_flag_choices = Argument("--toggle"; flag = true, choices = [""])
-    @test valid_flag_choices.flag
+    @test_throws ArgumentError Argument("--toggle"; flag = true, choices = [""])
     @test_throws ArgumentError Argument("--broken"; flag = true, choices = ["1"])
     @test_throws ArgumentError Argument("--badregex"; flag = true, regex = r"^1$")
 
